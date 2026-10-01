@@ -116,7 +116,7 @@ class _WithdrawNgnScreenState extends State<WithdrawNgnScreen> {
               ),
               const SizedBox(height: 16),
               const Text(
-                'Withdrawal Initiated',
+                'Withdrawal Requested',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _kDark),
                 textAlign: TextAlign.center,
               ),
@@ -126,13 +126,35 @@ class _WithdrawNgnScreenState extends State<WithdrawNgnScreen> {
                 text: TextSpan(
                   style: const TextStyle(fontSize: 14, color: _kGrey, height: 1.6),
                   children: [
-                    const TextSpan(text: 'Your withdrawal of '),
+                    const TextSpan(text: 'We’re processing your withdrawal of '),
                     TextSpan(
                       text: '₦${amount.toStringAsFixed(2)}',
                       style: const TextStyle(fontWeight: FontWeight.bold, color: _kDark),
                     ),
                     const TextSpan(
-                      text: ' has been sent to Flutterwave for processing. It typically arrives within 24 hours.',
+                      text: '. You’ll get a notification once it reaches your bank. '
+                          'If anything goes wrong, the money goes straight back to your Axira wallet.',
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    Icon(Icons.info_outline_rounded, size: 16, color: _kGrey),
+                    SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'Track the status anytime in Transaction History.',
+                        style: TextStyle(fontSize: 12, color: _kGrey, height: 1.4),
+                      ),
                     ),
                   ],
                 ),

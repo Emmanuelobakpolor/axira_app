@@ -14,8 +14,21 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  late Animation<double> _fadeAnimation;
-  late Animation<double> _scaleAnimation;
+
+  // Background: gentle zoom so the art feels alive without distracting.
+  late Animation<double> _bgScale;
+  late Animation<double> _bgFade;
+
+  // Diagonal light sweep that glides across the wordmark once.
+  late Animation<double> _shimmerPosition;
+  late Animation<double> _shimmerOpacity;
+
+  // Glow pulse that breathes behind the mark.
+  late Animation<double> _glowPulse;
+
+  // Tagline + loader fade in last.
+  late Animation<double> _taglineFade;
+  late Animation<double> _taglineSlide;
 
   @override
   void initState() {
@@ -23,26 +36,65 @@ class _SplashScreenState extends State<SplashScreen>
 
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 2600),
     );
 
-_fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-  CurvedAnimation(
-    parent: _controller,
-    curve: const Interval(0.0, 1.0, curve: Curves.easeInOut),
-  ),
-);
+    _bgFade = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.0, 0.5, curve: Curves.easeOut),
+      ),
+    );
 
-_scaleAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
-  CurvedAnimation(
-    parent: _controller,
-    curve: const Interval(0.0, 1.0, curve: Curves.easeInOut),
-  ),
-);
+    _bgScale = Tween<double>(begin: 1.12, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.0, 1.0, curve: Curves.easeOutCubic),
+      ),
+    );
+
+    _shimmerPosition = Tween<double>(begin: -1.4, end: 1.4).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.30, 0.62, curve: Curves.easeInOut),
+      ),
+    );
+
+    _shimmerOpacity = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 30),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.0), weight: 40),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 30),
+    ]).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.30, 0.62, curve: Curves.linear),
+      ),
+    );
+
+    _glowPulse = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.35, 1.0, curve: Curves.easeInOut),
+      ),
+    );
+
+    _taglineFade = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.55, 0.85, curve: Curves.easeOut),
+      ),
+    );
+
+    _taglineSlide = Tween<double>(begin: 12.0, end: 0.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.55, 0.85, curve: Curves.easeOutCubic),
+      ),
+    );
 
     _controller.forward();
 
-    Future.delayed(const Duration(milliseconds: 2800), () async {
+    Future.delayed(const Duration(milliseconds: 3000), () async {
       if (!mounted) return;
       final hasToken = await TokenStorage().hasToken();
       if (!mounted) return;
@@ -67,32 +119,141 @@ _scaleAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color.fromARGB(255, 0, 0, 0),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final logoSize = (constraints.maxWidth * 0.50)
-              .clamp(80.0, constraints.maxHeight * 0.20)
-              .toDouble();
+      backgroundColor: const Color(0xFF080D1C),
+      body: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              // Solid navy base matching the artwork's own background, so the
+              // square image can sit at a controlled size without stretching
+              // to fill (and blowing up) a tall phone screen.
+              const ColoredBox(color: Color(0xFF080D1C)),
 
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: AnimatedBuilder(
-                animation: _controller,
-                builder: (context, child) => Opacity(
-                  opacity: _fadeAnimation.value,
+              // Branded artwork, sized to a sane fraction of the screen and
+              // centered, with its edges feathered into the navy background
+              // so no rectangular border is ever visible — gently zooming
+              // + fading in.
+              Center(
+                child: Opacity(
+                  opacity: _bgFade.value,
                   child: Transform.scale(
-                    scale: _scaleAnimation.value,
-                    child: child,
+                    scale: _bgScale.value,
+                    child: FractionallySizedBox(
+                      widthFactor: 0.72,
+                      child: AspectRatio(
+                        aspectRatio: 0.5,
+                        child: ShaderMask(
+                          blendMode: BlendMode.dstIn,
+                          shaderCallback: (rect) => const RadialGradient(
+                            colors: [
+                              Colors.white,
+                              Colors.white,
+                              Colors.transparent,
+                            ],
+                            stops: [0.0, 0.62, 1.0],
+                          ).createShader(rect),
+                          child: Image.asset(
+                            'src/assets/splash_background.jpeg',
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-                child: Image.asset(
-                  'assets/LOGOADMIN-removebg-preview.png',
-                  width: logoSize,
-                  fit: BoxFit.contain,
+              ),
+
+              // Diagonal shimmer sweep gliding once across the wordmark.
+              IgnorePointer(
+                child: Opacity(
+                  opacity: _shimmerOpacity.value,
+                  child: Align(
+                    alignment: Alignment(_shimmerPosition.value, 0),
+                    child: Transform.rotate(
+                      angle: -0.35,
+                      child: Container(
+                        width: 90,
+                        height: MediaQuery.of(context).size.height * 1.4,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: [
+                              Colors.white.withValues(alpha: 0.0),
+                              Colors.white.withValues(alpha: 0.14),
+                              Colors.white.withValues(alpha: 0.0),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
+
+              // Breathing glow behind the mark for extra polish.
+              Center(
+                child: Opacity(
+                  opacity: (0.25 + 0.20 * _glowPulse.value).clamp(0.0, 1.0),
+                  child: Container(
+                    width: 260 + (30 * _glowPulse.value),
+                    height: 260 + (30 * _glowPulse.value),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [
+                          const Color(0xFF3B6BFF).withValues(alpha: 0.55),
+                          const Color(0xFF3B6BFF).withValues(alpha: 0.0),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // Foreground content: tagline + loader, anchored below the
+              // wordmark that already sits in the background artwork.
+              SafeArea(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Transform.translate(
+                      offset: Offset(0, _taglineSlide.value),
+                      child: Opacity(
+                        opacity: _taglineFade.value,
+                        child: Column(
+                          children: [
+                            Text(
+                              'INVEST. TRADE. GROW.',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.72),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 4,
+                              ),
+                            ),
+                            const SizedBox(height: 28),
+                            SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.4,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  const Color(0xFF6E9BFF).withValues(alpha: 0.85),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 64),
+                  ],
+                ),
+              ),
+            ],
           );
         },
       ),
