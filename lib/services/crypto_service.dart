@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../utils/fiat_format.dart';
 import 'auth_service.dart';
 
 const _kBaseUrl = 'https://web-production-b557d.up.railway.app/api';
@@ -33,6 +34,7 @@ class CoinInfo {
   final String letter;
   final String? logoUrl;
   final double priceNgn;
+  final double priceUsd;
 
   const CoinInfo({
     required this.symbol,
@@ -41,6 +43,7 @@ class CoinInfo {
     required this.letter,
     required this.logoUrl,
     required this.priceNgn,
+    this.priceUsd = 0,
   });
 
   factory CoinInfo.fromJson(Map<String, dynamic> json) {
@@ -53,6 +56,7 @@ class CoinInfo {
       letter: json['letter'] as String,
       logoUrl: json['logo_url'] as String?,
       priceNgn: double.tryParse(json['price_ngn'].toString()) ?? 0,
+      priceUsd: double.tryParse(json['price_usd']?.toString() ?? '') ?? 0,
     );
   }
 }
@@ -60,8 +64,13 @@ class CoinInfo {
 class CryptoPricesData {
   final List<CoinInfo> coins;
   final Map<String, double> prices;
+  final double ngnPerUsd;
 
-  const CryptoPricesData({required this.coins, required this.prices});
+  const CryptoPricesData({
+    required this.coins,
+    required this.prices,
+    this.ngnPerUsd = 0,
+  });
 }
 
 class CryptoFees {
@@ -122,6 +131,50 @@ class CryptoQuote {
       );
 
   bool get isExpired => DateTime.now().isAfter(expiresAt);
+
+  /// NGN per coin with Axira's fee folded in: what the customer actually
+  /// pays per coin on a buy, or receives per coin on a sell.
+  double get effectiveRateNgn =>
+      coinAmount > 0 ? totalNgn / coinAmount : rateNgn;
+}
+
+/// Minimums and the daily transfer cap, from GET /crypto/limits/.
+class CryptoLimits {
+  final double minOrderNgn;
+  final double withdrawMinNgn;
+  final double withdrawDailyLimitNgn;
+  final double withdrawRemainingTodayNgn;
+  final Map<String, double> withdrawMinAmounts;
+
+  const CryptoLimits({
+    this.minOrderNgn = 1000,
+    this.withdrawMinNgn = 1000,
+    this.withdrawDailyLimitNgn = 0,
+    this.withdrawRemainingTodayNgn = 0,
+    this.withdrawMinAmounts = const {},
+  });
+
+  factory CryptoLimits.fromJson(Map<String, dynamic> json) {
+    double d(String k, double fallback) =>
+        double.tryParse(json[k]?.toString() ?? '') ?? fallback;
+    final mins = (json['withdraw_min_amounts'] as Map<String, dynamic>?) ?? {};
+    return CryptoLimits(
+      minOrderNgn: d('min_order_ngn', 1000),
+      withdrawMinNgn: d('withdraw_min_ngn', 1000),
+      withdrawDailyLimitNgn: d('withdraw_daily_limit_ngn', 0),
+      withdrawRemainingTodayNgn: d('withdraw_remaining_today_ngn', 0),
+      withdrawMinAmounts: mins.map(
+          (k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0)),
+    );
+  }
+
+  /// Smallest amount of [coin] that can be sent at [priceNgn]: the larger
+  /// of Quidax's per-coin minimum and the NGN minimum.
+  double withdrawMinCoin(String coin, double priceNgn) {
+    final fromNgn = priceNgn > 0 ? withdrawMinNgn / priceNgn : 0.0;
+    final fromCoin = withdrawMinAmounts[coin] ?? 0;
+    return fromNgn > fromCoin ? fromNgn : fromCoin;
+  }
 }
 
 class CryptoWalletBalance {
@@ -253,6 +306,7 @@ class SellOrderResult {
   final double payoutNgn;
   final String depositAddress;
   final String status;
+  final String? errorDetail;
 
   const SellOrderResult({
     required this.reference,
@@ -263,6 +317,7 @@ class SellOrderResult {
     required this.payoutNgn,
     required this.depositAddress,
     required this.status,
+    this.errorDetail,
   });
 
   factory SellOrderResult.fromJson(Map<String, dynamic> json) =>
@@ -275,6 +330,7 @@ class SellOrderResult {
         payoutNgn: double.tryParse(json['payout_ngn'].toString()) ?? 0,
         depositAddress: json['deposit_address']?.toString() ?? '',
         status: json['status'] as String,
+        errorDetail: json['error_detail']?.toString(),
       );
 }
 
@@ -286,6 +342,7 @@ class SwapOrderResult {
   final double toCoinAmount;
   final double feeNgn;
   final String status;
+  final String? errorDetail;
 
   const SwapOrderResult({
     required this.reference,
@@ -295,6 +352,7 @@ class SwapOrderResult {
     required this.toCoinAmount,
     required this.feeNgn,
     required this.status,
+    this.errorDetail,
   });
 
   factory SwapOrderResult.fromJson(Map<String, dynamic> json) =>
@@ -306,6 +364,7 @@ class SwapOrderResult {
         toCoinAmount: double.tryParse(json['to_coin_amount'].toString()) ?? 0,
         feeNgn: double.tryParse(json['fee_ngn'].toString()) ?? 0,
         status: json['status'] as String,
+        errorDetail: json['error_detail']?.toString(),
       );
 }
 
@@ -392,6 +451,37 @@ class WithdrawalResult {
       );
 }
 
+class CryptoDepositRecord {
+  final String reference;
+  final String coin;
+  final String network;
+  final double amount;
+  final String status; // 'pending' (awaiting confirmations) | 'completed'
+  final String txId;
+  final String createdAt;
+
+  const CryptoDepositRecord({
+    required this.reference,
+    required this.coin,
+    required this.network,
+    required this.amount,
+    required this.status,
+    required this.txId,
+    required this.createdAt,
+  });
+
+  factory CryptoDepositRecord.fromJson(Map<String, dynamic> json) =>
+      CryptoDepositRecord(
+        reference: json['reference']?.toString() ?? '',
+        coin: json['coin']?.toString() ?? '',
+        network: json['network']?.toString() ?? '',
+        amount: double.tryParse(json['amount'].toString()) ?? 0,
+        status: json['status']?.toString() ?? 'completed',
+        txId: json['tx_id']?.toString() ?? '',
+        createdAt: json['created_at']?.toString() ?? '',
+      );
+}
+
 // Coins that run on more than one chain — everything else uses Quidax's
 // default network for that coin, so no network picker is shown for them.
 const Map<String, List<String>> kCryptoMultiChainNetworks = {
@@ -467,7 +557,12 @@ class CryptoService {
           final coins = rawCoins
               .map((e) => CoinInfo.fromJson(e as Map<String, dynamic>))
               .toList();
-          return CryptoPricesData(coins: coins, prices: prices);
+          return CryptoPricesData(
+            coins: coins,
+            prices: prices,
+            ngnPerUsd:
+                double.tryParse(body['ngn_per_usd']?.toString() ?? '') ?? 0,
+          );
         }
         throw CryptoException(_extractError(res));
       });
@@ -489,6 +584,16 @@ class CryptoService {
         throw CryptoException(_extractError(res));
       });
 
+  /// Minimums and the daily transfer cap for the signed-in user.
+  static Future<CryptoLimits> getLimits() => _guard(() async {
+        final res = await _authedGet('$_kBaseUrl/crypto/limits/');
+        if (res.statusCode == 200) {
+          return CryptoLimits.fromJson(
+              jsonDecode(res.body) as Map<String, dynamic>);
+        }
+        throw CryptoException(_extractError(res));
+      });
+
   /// Request a price-locked quote valid for 60 seconds.
   /// Must call this before placing any buy/sell/swap order.
   /// [type] : 'buy' | 'sell' | 'swap'
@@ -503,7 +608,7 @@ class CryptoService {
         final body = <String, dynamic>{
           'type': type,
           'coin': coin,
-          'amount': amount.toString(),
+          'amount': formatCoinQty(amount),
           if (toCoin.isNotEmpty) 'to_coin': toCoin,
         };
         final res = await _authedPost('$_kBaseUrl/crypto/quote/', body);
@@ -558,7 +663,7 @@ class CryptoService {
         final body = <String, dynamic>{
           'coin': coin,
           'address': address,
-          'amount': amount.toString(),
+          'amount': formatCoinQty(amount),
           if (network.isNotEmpty) 'network': network,
           if (idempotencyKey.isNotEmpty) 'idempotency_key': idempotencyKey,
         };
@@ -566,6 +671,21 @@ class CryptoService {
         if (res.statusCode == 200 || res.statusCode == 201) {
           return WithdrawalResult.fromJson(
               jsonDecode(res.body) as Map<String, dynamic>);
+        }
+        throw CryptoException(_extractError(res));
+      });
+
+  /// Fetch the current user's incoming crypto deposits (the backend
+  /// reconciles with Quidax first, so unconfirmed ones show as pending).
+  static Future<List<CryptoDepositRecord>> getDeposits() => _guard(() async {
+        final res = await _authedGet('$_kBaseUrl/crypto/deposits/');
+        if (res.statusCode == 200) {
+          final body = jsonDecode(res.body) as Map<String, dynamic>;
+          final list = body['deposits'] as List<dynamic>;
+          return list
+              .map((e) =>
+                  CryptoDepositRecord.fromJson(e as Map<String, dynamic>))
+              .toList();
         }
         throw CryptoException(_extractError(res));
       });
@@ -579,6 +699,19 @@ class CryptoService {
           return list
               .map((e) => WithdrawalResult.fromJson(e as Map<String, dynamic>))
               .toList();
+        }
+        throw CryptoException(_extractError(res));
+      });
+
+  /// Fetch the latest status of one withdrawal (the backend reconciles it
+  /// with Quidax if it's still processing).
+  static Future<WithdrawalResult> getWithdrawal(String reference) =>
+      _guard(() async {
+        final res = await _authedGet(
+            '$_kBaseUrl/crypto/withdrawals/${Uri.encodeComponent(reference)}/');
+        if (res.statusCode == 200) {
+          return WithdrawalResult.fromJson(
+              jsonDecode(res.body) as Map<String, dynamic>);
         }
         throw CryptoException(_extractError(res));
       });

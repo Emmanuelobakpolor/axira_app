@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -8,12 +10,65 @@ const _kDark = Color(0xFF111827);
 const _kGrey = Color(0xFF9CA3AF);
 const _kBorder = Color(0xFFE5E7EB);
 
-class TransferSuccessScreen extends StatelessWidget {
+class TransferSuccessScreen extends StatefulWidget {
   final WithdrawalResult result;
 
   const TransferSuccessScreen({super.key, required this.result});
 
+  @override
+  State<TransferSuccessScreen> createState() => _TransferSuccessScreenState();
+}
+
+class _TransferSuccessScreenState extends State<TransferSuccessScreen> {
+  // Poll the backend while Quidax is still settling the transfer.
+  static const _kPollInterval = Duration(seconds: 6);
+  static const _kMaxPolls = 30; // ~3 minutes
+
+  late WithdrawalResult result = widget.result;
+  Timer? _pollTimer;
+  int _polls = 0;
+
   bool get _isProcessing => result.status == 'processing';
+  bool get _isRejected => result.status == 'rejected' || result.status == 'failed';
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isProcessing) {
+      _pollTimer = Timer.periodic(_kPollInterval, (_) => _refreshStatus());
+    }
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshStatus() async {
+    if (++_polls > _kMaxPolls) {
+      _pollTimer?.cancel();
+      return;
+    }
+    try {
+      final latest = await CryptoService.getWithdrawal(result.reference);
+      if (!mounted) return;
+      setState(() => result = latest);
+      if (!_isProcessing) _pollTimer?.cancel();
+    } catch (_) {
+      // Transient network error — try again on the next tick.
+    }
+  }
+
+  String get _statusLabel {
+    switch (result.status) {
+      case 'completed': return 'Completed';
+      case 'processing': return 'Processing';
+      case 'rejected': return 'Rejected (refunded)';
+      case 'failed': return 'Failed';
+      default: return result.status;
+    }
+  }
 
   String get _shortAddr {
     final a = result.address;
@@ -71,7 +126,9 @@ class TransferSuccessScreen extends StatelessWidget {
                         shape: BoxShape.circle,
                         color: _isProcessing
                             ? const Color(0xFFFFF3E0)
-                            : const Color(0xFFE8F5E9),
+                            : _isRejected
+                                ? const Color(0xFFFDECEA)
+                                : const Color(0xFFE8F5E9),
                       ),
                       child: Center(
                         child: Container(
@@ -81,12 +138,16 @@ class TransferSuccessScreen extends StatelessWidget {
                             shape: BoxShape.circle,
                             color: _isProcessing
                                 ? const Color(0xFFF59E0B)
-                                : const Color(0xFF2E7D32),
+                                : _isRejected
+                                    ? Colors.red
+                                    : const Color(0xFF2E7D32),
                           ),
                           child: Icon(
                               _isProcessing
                                   ? Icons.hourglass_top_rounded
-                                  : Icons.verified,
+                                  : _isRejected
+                                      ? Icons.close_rounded
+                                      : Icons.verified,
                               color: Colors.white,
                               size: 30),
                         ),
@@ -96,7 +157,11 @@ class TransferSuccessScreen extends StatelessWidget {
 
                     // ── Title ─────────────────────────────────────────────────
                     Text(
-                      _isProcessing ? 'Transfer Submitted' : 'Transfer Successful!',
+                      _isProcessing
+                          ? 'Transfer Submitted'
+                          : _isRejected
+                              ? 'Transfer Failed'
+                              : 'Transfer Successful!',
                       style: const TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
@@ -107,6 +172,14 @@ class TransferSuccessScreen extends StatelessWidget {
                     if (_isProcessing) ...[
                       const Text(
                         "We're broadcasting this to the network. You'll see the final status in your transaction history shortly.",
+                        style: TextStyle(fontSize: 13, color: _kGrey, height: 1.4),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (_isRejected) ...[
+                      const Text(
+                        'This transfer could not be completed. The amount has been returned to your wallet.',
                         style: TextStyle(fontSize: 13, color: _kGrey, height: 1.4),
                         textAlign: TextAlign.center,
                       ),
@@ -152,7 +225,7 @@ class TransferSuccessScreen extends StatelessWidget {
                               value:
                                   '${result.fee} ${result.coin}'),
                           const _Divider(),
-                          _Row(label: 'Status', value: result.status),
+                          _Row(label: 'Status', value: _statusLabel),
                           if (result.txId.isNotEmpty) ...[
                             const _Divider(),
                             _HashRow(hash: result.txId),

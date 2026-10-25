@@ -9,8 +9,10 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../services/auth_service.dart' show AuthException;
 import '../../services/crypto_service.dart';
+import '../../utils/fiat_format.dart';
 import '../../utils/session_guard.dart';
 import '../../widgets/coin_logo.dart';
+import '../../widgets/crypto_amount_field.dart';
 import '../../widgets/error_banner.dart';
 import '../../widgets/error_snackbar.dart';
 import 'crypto_pending_screen.dart';
@@ -41,18 +43,24 @@ String _fmtNum(double v) {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 class BuyCryptoScreen extends StatefulWidget {
-  const BuyCryptoScreen({super.key});
+  /// Opens on the Sell tab with [initialCoin] preselected — used when the
+  /// user taps a holding on the My Crypto screen.
+  final bool initialSell;
+  final String? initialCoin;
+
+  const BuyCryptoScreen({super.key, this.initialSell = false, this.initialCoin});
 
   @override
   State<BuyCryptoScreen> createState() => _BuyCryptoScreenState();
 }
 
 class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
-  bool _isBuy = true;
-  String? _token;
-  final _qtyCtrl = TextEditingController();
+  late bool _isBuy = !widget.initialSell;
+  late String? _token = widget.initialCoin;
+  final _amount = CryptoAmountController();
 
   List<CoinInfo> _coins = [];
+  CryptoLimits _limits = const CryptoLimits();
   Map<String, double> _prices = {};
   Map<String, CryptoFees> _fees = {};
   bool _loading = true;
@@ -61,8 +69,13 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
   @override
   void initState() {
     super.initState();
+    _amount.addListener(_onAmountChanged);
     _loadPricesAndFees();
   }
+
+  void _onAmountChanged() => setState(() {});
+
+  CoinInfo? get _coin => _coins.where((c) => c.symbol == _token).firstOrNull;
 
   Future<void> _loadPricesAndFees() async {
     setState(() {
@@ -73,6 +86,10 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
       final results = await Future.wait([
         CryptoService.getPrices(),
         CryptoService.getFees(),
+        // Limits only drive the minimum hint; the backend enforces it.
+        CryptoService.getLimits()
+            .then<CryptoLimits?>((l) => l)
+            .catchError((_) => null),
       ]);
       if (!mounted) return;
       final pricesData = results[0] as CryptoPricesData;
@@ -80,6 +97,8 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
         _coins = pricesData.coins;
         _prices = pricesData.prices;
         _fees = results[1] as Map<String, CryptoFees>;
+        _limits = results[2] as CryptoLimits? ?? _limits;
+        _amount.priceUsd = _coin?.priceUsd ?? 0;
         _loading = false;
       });
     } on CryptoException catch (e) {
@@ -92,7 +111,7 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
   }
 
   double get _rate => _prices[_token] ?? 0;
-  double get _qty => double.tryParse(_qtyCtrl.text) ?? 0;
+  double get _qty => _amount.coinQty;
   double get _baseNgn => _qty * _rate;
 
   CryptoFees? get _currentFees => _fees[_isBuy ? 'buy' : 'sell'];
@@ -107,12 +126,27 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
   // Buy: user pays base + fee; Sell: user receives base - fee
   double get _totalNgn => _isBuy ? _baseNgn + _feeNgn : _baseNgn - _feeNgn;
 
+  /// Rate with Axira's fee folded in, so customers see one number: what
+  /// they pay per coin (buy) or receive per coin (sell). Before an amount
+  /// is entered only the percentage part of the fee can be applied.
+  double get _effectiveRate {
+    if (_rate <= 0) return 0;
+    if (_qty > 0 && _totalNgn > 0) return _totalNgn / _qty;
+    final pct = (_currentFees?.percent ?? 0) / 100;
+    return _isBuy ? _rate * (1 + pct) : _rate * (1 - pct);
+  }
+
+  double get _minQty =>
+      _rate > 0 ? _limits.minOrderNgn / _rate : 0;
+
+  bool get _belowMin => _qty > 0 && _rate > 0 && _baseNgn < _limits.minOrderNgn;
+
   bool get _canContinue =>
-      _token != null && _qty > 0 && _rate > 0 && !_loading;
+      _token != null && _qty > 0 && _rate > 0 && !_belowMin && !_loading;
 
   @override
   void dispose() {
-    _qtyCtrl.dispose();
+    _amount.dispose();
     super.dispose();
   }
 
@@ -128,7 +162,10 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
         selected: _token,
         coins: _coins,
         onSelect: (tok) {
-          setState(() => _token = tok);
+          setState(() {
+            _token = tok;
+            _amount.priceUsd = _coin?.priceUsd ?? 0;
+          });
           Navigator.pop(context);
         },
       ),
@@ -256,56 +293,47 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // ── Quantity ───────────────────────────────────────────────
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _kBorder),
-                  ),
-                  child: TextField(
-                    controller: _qtyCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d*')),
-                    ],
-                    onChanged: (_) => setState(() {}),
-                    style: const TextStyle(fontSize: 14, color: _kDark),
-                    decoration: InputDecoration(
-                      hintText: _isBuy
-                          ? 'Enter quantity to buy'
-                          : 'Enter quantity to sell',
-                      hintStyle:
-                          const TextStyle(color: Color(0xFFB0B7C3), fontSize: 14),
-                      border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 16),
-                    ),
-                  ),
+                // ── Amount (coin or USD) ───────────────────────────────────
+                CryptoAmountField(
+                  controller: _amount,
+                  symbol: _token ?? '',
+                  hint: _isBuy
+                      ? 'Enter quantity to buy'
+                      : 'Enter quantity to sell',
                 ),
                 const SizedBox(height: 6),
-                const Text(
-                  'Min: 0.00',
-                  style: TextStyle(fontSize: 12, color: _kBlue),
-                ),
+                if (_belowMin)
+                  Text(
+                    'Minimum order is ${formatNgn(_limits.minOrderNgn)}'
+                    ' (≈ ${formatCoinQty(_minQty)} $_token).',
+                    style: const TextStyle(fontSize: 12, color: Colors.red),
+                  )
+                else if (_token != null &&
+                    _amount.conversionLine(_token!).isNotEmpty)
+                  Text(
+                    _amount.conversionLine(_token!),
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: _kBlue,
+                        fontWeight: FontWeight.w600),
+                  ),
+                if (_token != null && _minQty > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Min: ${formatNgn(_limits.minOrderNgn)} (≈ ${formatCoinQty(_minQty)} $_token)',
+                      style: const TextStyle(fontSize: 12, color: _kGrey),
+                    ),
+                  ),
                 const SizedBox(height: 16),
 
-                // ── Rate ──────────────────────────────────────────────────
+                // ── Rate (fee included) ───────────────────────────────────
                 _InfoBox(
-                    label: 'Rate',
-                    value: _rate == 0
+                    label: 'Your rate',
+                    value: _effectiveRate == 0
                         ? '—'
-                        : '₦${_fmtNum(_rate)} / $_token'),
+                        : '₦${_fmtNum(_effectiveRate)} / $_token'),
                 const SizedBox(height: 10),
-
-                // ── Fee ───────────────────────────────────────────────────
-                if (_qty > 0 && _rate > 0) ...[
-                  _InfoBox(
-                      label: 'Fee',
-                      value: '₦${_fmtNum(_feeNgn)}'),
-                  const SizedBox(height: 10),
-                ],
 
                 // ── Total ─────────────────────────────────────────────────
                 _InfoBox(
@@ -735,7 +763,15 @@ class _OrderSheetState extends State<_OrderSheet> {
           idempotencyKey: ikey,
         );
         if (!mounted) return;
-        setState(() => _sellResult = result);
+        setState(() {
+          if (result.status == 'failed') {
+            _error = result.errorDetail?.isNotEmpty == true
+                ? result.errorDetail!
+                : 'Your sale could not be completed. Please try again.';
+          } else {
+            _sellResult = result;
+          }
+        });
       }
     } on AuthException catch (_) {
       if (!mounted) return;
@@ -932,7 +968,6 @@ class _OrderSheetState extends State<_OrderSheet> {
 
     // Pre-submission: show summary + countdown timer
     final q = widget.quote;
-    final baseNgn = widget.qty * q.rateNgn;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -974,13 +1009,12 @@ class _OrderSheetState extends State<_OrderSheet> {
             ),
           ),
         _OrderRow(label: 'Token:', value: widget.token),
-        _OrderRow(label: 'Rate:', value: '₦${_fmtNum(q.rateNgn)}'),
-        _OrderRow(label: 'Quantity:', value: _fmtNum(widget.qty)),
         _OrderRow(
-          label: widget.isBuy ? 'Subtotal:' : 'Gross proceeds:',
-          value: '₦${_fmtNum(baseNgn)}',
-        ),
-        _OrderRow(label: 'Fee:', value: '₦${_fmtNum(q.feeNgn)}'),
+            label: 'Your rate:',
+            value: '₦${_fmtNum(q.effectiveRateNgn)} / ${widget.token}'),
+        _OrderRow(
+            label: 'Quantity:',
+            value: '${formatCoinQty(widget.qty)} ${widget.token}'),
         _OrderRow(
           label: widget.isBuy ? 'Total to pay (NGN):' : 'You receive (NGN):',
           value: '₦${_fmtNum(q.totalNgn)}',
@@ -1226,9 +1260,14 @@ class _BuyConfirmBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _OrderRow(label: 'Reference:', value: result.reference),
+        _OrderRow(
+            label: 'Reference:',
+            value: result.reference,
+            copyable: true),
         _OrderRow(label: 'Token:', value: result.coin),
-        _OrderRow(label: 'Quantity:', value: _fmtNum(result.coinAmount)),
+        _OrderRow(
+            label: 'Quantity:',
+            value: '${formatCoinQty(result.coinAmount)} ${result.coin}'),
         _OrderRow(
             label: 'Total to pay:',
             value: '₦${_fmtNum(result.totalNgn)}',
@@ -1260,17 +1299,20 @@ class _BuyConfirmBody extends StatelessWidget {
                     label: 'Account Number:',
                     value: bank.accountNumber.isEmpty
                         ? 'Contact support'
-                        : bank.accountNumber),
+                        : bank.accountNumber,
+                    copyable: bank.accountNumber.isNotEmpty),
                 _InfoLine(
                     label: 'Account Name:',
                     value: bank.accountName.isEmpty
                         ? 'Axira'
-                        : bank.accountName),
+                        : bank.accountName,
+                    copyable: bank.accountName.isNotEmpty),
                 _InfoLine(
                     label: 'Bank Name:',
                     value: bank.bankName.isEmpty
                         ? 'Contact support'
-                        : bank.bankName),
+                        : bank.bankName,
+                    copyable: bank.bankName.isNotEmpty),
                 const SizedBox(height: 8),
                 const Text(
                   'Use your reference as transfer narration.',
@@ -1353,9 +1395,14 @@ class _SellConfirmBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _OrderRow(label: 'Reference:', value: result.reference),
+        _OrderRow(
+            label: 'Reference:',
+            value: result.reference,
+            copyable: true),
         _OrderRow(label: 'Token:', value: result.coin),
-        _OrderRow(label: 'Quantity:', value: _fmtNum(result.coinAmount)),
+        _OrderRow(
+            label: 'Quantity:',
+            value: '${formatCoinQty(result.coinAmount)} ${result.coin}'),
         _OrderRow(
             label: 'You will receive:',
             value: '₦${_fmtNum(result.payoutNgn)}',
@@ -1384,7 +1431,8 @@ class _SellConfirmBody extends StatelessWidget {
                   label: 'Deposit Address:',
                   value: result.depositAddress.isEmpty
                       ? 'Contact support for address'
-                      : result.depositAddress),
+                      : result.depositAddress,
+                  copyable: result.depositAddress.isNotEmpty),
               _InfoLine(label: 'Network:', value: result.coin),
               const SizedBox(height: 8),
               const Text(
@@ -1476,12 +1524,46 @@ class _OrderRow extends StatelessWidget {
   final String label;
   final String value;
   final bool bold;
+  final bool copyable;
 
-  const _OrderRow(
-      {required this.label, required this.value, this.bold = false});
+  const _OrderRow({
+      required this.label,
+      required this.value,
+      this.bold = false,
+      this.copyable = false});
+
+  void _onCopy(BuildContext context) {
+    Clipboard.setData(ClipboardData(text: value));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Copied to clipboard'),
+        duration: Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (!copyable) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label,
+                style: const TextStyle(fontSize: 13, color: _kGrey)),
+            Text(value,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight:
+                        bold ? FontWeight.bold : FontWeight.w600,
+                    color: _kDark)),
+          ],
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
@@ -1489,12 +1571,37 @@ class _OrderRow extends StatelessWidget {
         children: [
           Text(label,
               style: const TextStyle(fontSize: 13, color: _kGrey)),
-          Text(value,
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight:
-                      bold ? FontWeight.bold : FontWeight.w600,
-                  color: _kDark)),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Flexible(
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: bold ? FontWeight.bold : FontWeight.w600,
+                        color: _kDark),
+                    textAlign: TextAlign.end,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => _onCopy(context),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEBF2FF),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: const Icon(Icons.copy_rounded,
+                        size: 14, color: _kBlue),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1504,14 +1611,75 @@ class _OrderRow extends StatelessWidget {
 class _InfoLine extends StatelessWidget {
   final String label;
   final String value;
-  const _InfoLine({required this.label, required this.value});
+  final bool copyable;
+  
+  const _InfoLine({
+    required this.label,
+    required this.value,
+    this.copyable = false,
+  });
+
+  void _onCopy(BuildContext context) {
+    Clipboard.setData(ClipboardData(text: value));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Copied to clipboard'),
+        duration: Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (!copyable) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text('$label $value',
+            style: const TextStyle(fontSize: 13, color: _kBlue)),
+      );
+    }
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Text('$label $value',
-          style: const TextStyle(fontSize: 13, color: _kBlue)),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: const TextStyle(
+                        fontSize: 12, color: _kGrey, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: _kDark,
+                      height: 1.4),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => _onCopy(context),
+            child: Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: const Color(0xFFEBF2FF),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Icon(Icons.copy_rounded,
+                  size: 16, color: _kBlue),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

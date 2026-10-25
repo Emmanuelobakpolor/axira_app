@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/auth_service.dart' show AuthService, kSessionExpiredError;
+import '../../services/crypto_service.dart';
 import '../../services/wallet_service.dart';
 import '../auth/sign_in_screen.dart';
 
@@ -11,6 +12,24 @@ const _kBg = Color(0xFFF9FAFB);
 
 const _kTabs = ['All', 'Deposits', 'Withdrawals'];
 const _kFilters = ['This Week', 'This Month', 'Custom'];
+
+// One row in the history list — NGN wallet transactions and crypto
+// withdrawals come from different endpoints, so both are mapped into this.
+class _HistoryItem {
+  final String txType; // 'deposit' | 'withdrawal'
+  final String title;
+  final String status;
+  final String amount;
+  final DateTime createdAt;
+
+  const _HistoryItem({
+    required this.txType,
+    required this.title,
+    required this.status,
+    required this.amount,
+    required this.createdAt,
+  });
+}
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -27,7 +46,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   bool _showFilter = false;
   String _activeFilter = 'This Week';
 
-  List<WalletTransaction> _all = [];
+  List<_HistoryItem> _all = [];
   bool _loading = true;
   String? _error;
 
@@ -39,28 +58,70 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
 
   Future<void> _load() async {
     try {
-      final txns = await WalletService.getTransactions();
+      final results = await Future.wait([
+        WalletService.getTransactions(),
+        // Crypto history is best-effort — don't hide NGN history if it fails.
+        CryptoService.getWithdrawals().catchError((_) => <WithdrawalResult>[]),
+        CryptoService.getDeposits().catchError((_) => <CryptoDepositRecord>[]),
+      ]);
+      final txns = results[0] as List<WalletTransaction>;
+      final withdrawals = results[1] as List<WithdrawalResult>;
+      final deposits = results[2] as List<CryptoDepositRecord>;
+
+      final items = <_HistoryItem>[
+        for (final t in txns)
+          _HistoryItem(
+            txType: t.txType,
+            title: t.txType == 'deposit' ? 'Deposit' : 'Withdrawal',
+            status: t.status,
+            amount: _formatAmount(t),
+            createdAt: t.createdAt,
+          ),
+        for (final w in withdrawals)
+          _HistoryItem(
+            txType: 'withdrawal',
+            title: '${w.coin} Withdrawal',
+            status: w.status,
+            amount: '-${_formatCrypto(w.amount)} ${w.coin}',
+            createdAt: DateTime.tryParse(w.createdAt)?.toLocal() ?? DateTime.now(),
+          ),
+        for (final d in deposits)
+          _HistoryItem(
+            txType: 'deposit',
+            title: '${d.coin} Deposit',
+            status: d.status,
+            amount: '+${_formatCrypto(d.amount)} ${d.coin}',
+            createdAt: DateTime.tryParse(d.createdAt)?.toLocal() ?? DateTime.now(),
+          ),
+      ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
       if (!mounted) return;
-      setState(() { _all = txns; _loading = false; });
+      setState(() { _all = items; _loading = false; });
     } on WalletException catch (e) {
       if (!mounted) return;
       setState(() { _error = e.message; _loading = false; });
     }
   }
 
-  List<WalletTransaction> get _filtered {
+  static String _formatCrypto(double v) {
+    var s = v.toStringAsFixed(8);
+    s = s.replaceFirst(RegExp(r'0+$'), '');
+    return s.endsWith('.') ? s.substring(0, s.length - 1) : s;
+  }
+
+  List<_HistoryItem> get _filtered {
     if (_activeTab == 1) return _all.where((t) => t.txType == 'deposit').toList();
     if (_activeTab == 2) return _all.where((t) => t.txType == 'withdrawal').toList();
     return _all;
   }
 
   // Group transactions into labelled buckets keyed by display date string
-  Map<String, List<WalletTransaction>> _grouped(List<WalletTransaction> txns) {
+  Map<String, List<_HistoryItem>> _grouped(List<_HistoryItem> txns) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final yesterday = today.subtract(const Duration(days: 1));
 
-    final Map<String, List<WalletTransaction>> groups = {};
+    final Map<String, List<_HistoryItem>> groups = {};
     for (final t in txns) {
       final d = DateTime(t.createdAt.year, t.createdAt.month, t.createdAt.day);
       String label;
@@ -100,8 +161,10 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   Color _statusColor(String status) {
     switch (status) {
       case 'completed': return _kBlue;
-      case 'pending':   return const Color(0xFFF59E0B);
-      case 'failed':    return Colors.red;
+      case 'pending':
+      case 'processing': return const Color(0xFFF59E0B);
+      case 'failed':
+      case 'rejected':  return Colors.red;
       default:          return _kGrey;
     }
   }
@@ -110,7 +173,9 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     switch (status) {
       case 'completed': return 'Completed';
       case 'pending':   return 'Pending';
+      case 'processing': return 'Processing';
       case 'failed':    return 'Failed';
+      case 'rejected':  return 'Rejected (refunded)';
       default:          return status;
     }
   }
@@ -233,10 +298,10 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
           for (final entry in groups.entries) ...[
             _GroupHeader(entry.key),
             ...entry.value.map((t) => _TxnRow(
-              type: t.txType == 'deposit' ? 'Deposit' : 'Withdrawal',
+              type: t.title,
               statusLabel: _statusLabel(t.status),
               statusColor: _statusColor(t.status),
-              amount: _formatAmount(t),
+              amount: t.amount,
               date: '${_formatGroupDate(t.createdAt)} ${_formatTime(t.createdAt)}',
               isPositive: t.txType == 'deposit',
             )),

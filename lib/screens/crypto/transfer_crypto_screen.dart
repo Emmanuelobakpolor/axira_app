@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../../services/auth_service.dart' show AuthException;
 import '../../services/crypto_service.dart';
+import '../../utils/fiat_format.dart';
 import '../../utils/session_guard.dart';
 import '../../widgets/coin_logo.dart';
+import '../../widgets/crypto_amount_field.dart';
 import 'transfer_success_screen.dart';
 
 const _kBlue = Color(0xFF0E24A0);
@@ -19,15 +21,15 @@ String _newIdempKey() {
   return List.generate(32, (_) => r.nextInt(16).toRadixString(16)).join();
 }
 
-String _qtyStr(double qty, String token) {
-  final n = qty % 1 == 0 ? qty.toStringAsFixed(0) : qty.toString();
-  return '$n $token';
-}
+String _qtyStr(double qty, String token) => '${formatCoinQty(qty)} $token';
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 class TransferCryptoScreen extends StatefulWidget {
-  const TransferCryptoScreen({super.key});
+  /// Preselects this coin once the coin list loads (e.g. from My Crypto).
+  final String? initialCoin;
+
+  const TransferCryptoScreen({super.key, this.initialCoin});
 
   @override
   State<TransferCryptoScreen> createState() => _TransferCryptoScreenState();
@@ -38,22 +40,26 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
   String _loadError = '';
   List<CoinInfo> _coins = [];
   Map<String, double> _available = {};
+  CryptoLimits _limits = const CryptoLimits();
 
   CoinInfo? _token;
   String _network = '';
   final _addressCtrl = TextEditingController();
-  final _qtyCtrl = TextEditingController();
+  final _amount = CryptoAmountController();
 
   @override
   void initState() {
     super.initState();
+    _amount.addListener(_onAmountChanged);
     _load();
   }
+
+  void _onAmountChanged() => setState(() {});
 
   @override
   void dispose() {
     _addressCtrl.dispose();
-    _qtyCtrl.dispose();
+    _amount.dispose();
     super.dispose();
   }
 
@@ -66,6 +72,10 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
       final results = await Future.wait([
         CryptoService.getPrices(),
         CryptoService.getWallets(),
+        // Limits only drive hints; the backend enforces them regardless.
+        CryptoService.getLimits()
+            .then<CryptoLimits?>((l) => l)
+            .catchError((_) => null),
       ]);
       if (!mounted) return;
       final pricesData = results[0] as CryptoPricesData;
@@ -73,6 +83,11 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
       setState(() {
         _coins = pricesData.coins;
         _available = {for (final w in wallets) w.coin: w.available};
+        _limits = results[2] as CryptoLimits? ?? _limits;
+        _token ??= _coins
+            .where((c) => c.symbol == widget.initialCoin)
+            .firstOrNull;
+        _amount.priceUsd = _token?.priceUsd ?? 0;
         _loading = false;
       });
     } on AuthException catch (_) {
@@ -87,8 +102,36 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
     }
   }
 
-  double get _qty => double.tryParse(_qtyCtrl.text) ?? 0;
+  double get _qty => _amount.coinQty;
   double get _availableForToken => _available[_token?.symbol] ?? 0;
+
+  double get _minQty => _token == null
+      ? 0
+      : _limits.withdrawMinCoin(_token!.symbol, _token!.priceNgn);
+
+  bool get _belowMin => _qty > 0 && _minQty > 0 && _qty < _minQty;
+
+  bool get _overDailyLimit =>
+      _token != null &&
+      _limits.withdrawDailyLimitNgn > 0 &&
+      _qty * _token!.priceNgn > _limits.withdrawRemainingTodayNgn;
+
+  /// Red error under the amount field, or '' if the amount is fine.
+  String get _amountError {
+    if (_token == null || _qty <= 0) return '';
+    if (_qty > _availableForToken) {
+      return 'Amount exceeds your available balance.';
+    }
+    if (_belowMin) {
+      return 'Minimum transfer is ${formatCoinQty(_minQty)} ${_token!.symbol}'
+          '${_token!.priceUsd > 0 ? ' (≈ ${formatUsd(_minQty * _token!.priceUsd)})' : ''}.';
+    }
+    if (_overDailyLimit) {
+      return 'You can send up to ${formatNgn(_limits.withdrawRemainingTodayNgn)} '
+          'more today (daily limit ${formatNgn(_limits.withdrawDailyLimitNgn)}).';
+    }
+    return '';
+  }
 
   bool get _needsNetwork =>
       _token != null && kCryptoMultiChainNetworks.containsKey(_token!.symbol);
@@ -98,7 +141,9 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
       (!_needsNetwork || _network.isNotEmpty) &&
       _addressCtrl.text.trim().isNotEmpty &&
       _qty > 0 &&
-      _qty <= _availableForToken;
+      _qty <= _availableForToken &&
+      !_belowMin &&
+      !_overDailyLimit;
 
   void _openTokenSheet() {
     showModalBottomSheet(
@@ -121,6 +166,7 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
             setState(() {
               _token = tok;
               _network = '';
+              _amount.priceUsd = tok.priceUsd;
             });
             Navigator.pop(context);
           },
@@ -149,9 +195,7 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
   }
 
   void _setMax() {
-    setState(() => _qtyCtrl.text = _availableForToken == 0
-        ? ''
-        : _availableForToken.toString());
+    setState(() => _amount.setCoin(_availableForToken));
   }
 
   void _onContinue() {
@@ -264,6 +308,25 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
                     'Available: ${_qtyStr(_availableForToken, _token!.symbol)}',
                     style: const TextStyle(fontSize: 12, color: _kGrey),
                   ),
+                  if (fiatValueLine(_availableForToken, _token).isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      fiatValueLine(_availableForToken, _token),
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: _kDark),
+                    ),
+                  ],
+                  if (_token!.priceNgn > 0) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      _token!.priceUsd > 0
+                          ? 'Rate: 1 ${_token!.symbol} = ${formatUsd(_token!.priceUsd)} · ${formatNgn(_token!.priceNgn)}'
+                          : 'Rate: 1 ${_token!.symbol} = ${formatNgn(_token!.priceNgn)}',
+                      style: const TextStyle(fontSize: 11, color: _kGrey),
+                    ),
+                  ],
                 ],
                 const SizedBox(height: 16),
 
@@ -291,14 +354,12 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // ── Quantity ───────────────────────────────────────────────
-                _InputField(
-                  controller: _qtyCtrl,
+                // ── Quantity (coin or USD) ─────────────────────────────────
+                CryptoAmountField(
+                  controller: _amount,
+                  symbol: _token?.symbol ?? '',
                   hint: 'Enter quantity to transfer',
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  onChanged: (_) => setState(() {}),
-                  suffix: TextButton(
+                  trailing: TextButton(
                     onPressed: _token == null ? null : _setMax,
                     child: const Text('MAX',
                         style: TextStyle(
@@ -308,15 +369,7 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                Text(
-                  _qty > _availableForToken
-                      ? 'Amount exceeds your available balance.'
-                      : 'Min: 0.00',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: _qty > _availableForToken ? Colors.red : _kBlue,
-                  ),
-                ),
+                _buildAmountHints(),
               ],
             ),
           ),
@@ -375,6 +428,49 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
       ],
     );
   }
+
+  Widget _buildAmountHints() {
+    final token = _token;
+    final error = _amountError;
+    final lines = <Widget>[];
+    if (error.isNotEmpty) {
+      lines.add(Text(error,
+          style: const TextStyle(fontSize: 12, color: Colors.red)));
+    } else if (token != null && _qty > 0) {
+      final conv = _amount.conversionLine(token.symbol);
+      final fiat = fiatValueLine(_qty, token);
+      lines.add(Text(
+        _amount.inUsd
+            ? 'You send $conv'
+            : 'You send ${fiat.isNotEmpty ? fiat : conv}',
+        style: const TextStyle(
+            fontSize: 12, color: _kBlue, fontWeight: FontWeight.w600),
+      ));
+    }
+    if (token != null) {
+      final minText = _minQty > 0
+          ? 'Min: ${formatCoinQty(_minQty)} ${token.symbol}'
+              '${token.priceUsd > 0 ? ' (≈ ${formatUsd(_minQty * token.priceUsd)})' : ''}'
+          : 'Min: ${formatNgn(_limits.withdrawMinNgn)}';
+      lines.add(Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(minText,
+            style: const TextStyle(fontSize: 12, color: _kGrey)),
+      ));
+      if (_limits.withdrawDailyLimitNgn > 0) {
+        lines.add(Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            'Daily limit: ${formatNgn(_limits.withdrawDailyLimitNgn)} · '
+            '${formatNgn(_limits.withdrawRemainingTodayNgn)} left today',
+            style: const TextStyle(fontSize: 12, color: _kGrey),
+          ),
+        ));
+      }
+    }
+    return Column(
+        crossAxisAlignment: CrossAxisAlignment.start, children: lines);
+  }
 }
 
 // ─── Dropdown Field ───────────────────────────────────────────────────────────
@@ -412,15 +508,11 @@ class _DropdownField extends StatelessWidget {
 class _InputField extends StatelessWidget {
   final TextEditingController controller;
   final String hint;
-  final TextInputType keyboardType;
   final ValueChanged<String> onChanged;
-  final Widget? suffix;
   const _InputField({
     required this.controller,
     required this.hint,
-    this.keyboardType = TextInputType.text,
     required this.onChanged,
-    this.suffix,
   });
 
   @override
@@ -433,21 +525,12 @@ class _InputField extends StatelessWidget {
       ),
       child: TextField(
         controller: controller,
-        keyboardType: keyboardType,
         onChanged: onChanged,
         style: const TextStyle(fontSize: 14, color: _kDark),
         decoration: InputDecoration(
           hintText: hint,
           hintStyle: const TextStyle(color: Color(0xFFB0B7C3), fontSize: 14),
           border: InputBorder.none,
-          suffixIcon: suffix == null
-              ? null
-              : Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: suffix,
-                ),
-          suffixIconConstraints:
-              const BoxConstraints(minWidth: 0, minHeight: 0),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         ),
@@ -596,9 +679,19 @@ class _TokenPickerSheetState extends State<_TokenPickerSheet> {
                                 ],
                               ),
                             ),
-                            Text(_qtyStr(avail, tok.symbol),
-                                style: const TextStyle(
-                                    fontSize: 12, color: _kGrey)),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(_qtyStr(avail, tok.symbol),
+                                    style: const TextStyle(
+                                        fontSize: 12, color: _kGrey)),
+                                if (avail > 0 &&
+                                    fiatValueLine(avail, tok).isNotEmpty)
+                                  Text(fiatValueLine(avail, tok),
+                                      style: const TextStyle(
+                                          fontSize: 11, color: _kGrey)),
+                              ],
+                            ),
                             const SizedBox(width: 8),
                             if (isSelected)
                               const Icon(Icons.check,
@@ -746,7 +839,9 @@ class _TransferSummaryDialogState extends State<_TransferSummaryDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final amtStr = _qtyStr(widget.qty, widget.coin.symbol);
+    final fiat = fiatValueLine(widget.qty, widget.coin);
+    final amtStr = '${formatCoinQty(widget.qty)} ${widget.coin.symbol}'
+        '${fiat.isNotEmpty ? '\n$fiat' : ''}';
 
     return Dialog(
       backgroundColor: Colors.white,

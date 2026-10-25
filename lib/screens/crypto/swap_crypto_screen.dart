@@ -894,6 +894,12 @@ class _SwapConfirmSheetState extends State<_SwapConfirmSheet> {
         idempotencyKey: _newIdempKey(),
       );
       if (!mounted) return;
+      if (result.status == 'failed') {
+        setState(() => _error = result.errorDetail?.isNotEmpty == true
+            ? result.errorDetail!
+            : 'Your swap could not be completed. Please try again.');
+        return;
+      }
       widget.onDone(result);
     } on AuthException catch (_) {
       if (!mounted) return;
