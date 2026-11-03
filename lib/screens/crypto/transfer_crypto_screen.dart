@@ -107,9 +107,18 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
 
   double get _minQty => _token == null
       ? 0
-      : _limits.withdrawMinCoin(_token!.symbol, _token!.priceNgn);
+      : _limits.withdrawMinCoin(_token!.symbol, _token!.priceNgn,
+          network: _network);
 
-  bool get _belowMin => _qty > 0 && _minQty > 0 && _qty < _minQty;
+  /// Quidax's on-chain fee, taken out of the amount entered.
+  double get _networkFee =>
+      _token == null ? 0 : _limits.networkFee(_token!.symbol, _network);
+
+  /// What actually arrives at the receiving wallet.
+  double get _receiveQty => floorCoinQty(_qty - _networkFee);
+
+  bool get _belowMin =>
+      _qty > 0 && ((_minQty > 0 && _qty < _minQty) || _receiveQty <= 0);
 
   bool get _overDailyLimit =>
       _token != null &&
@@ -207,6 +216,7 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
         network: _network,
         address: _addressCtrl.text.trim(),
         qty: _qty,
+        networkFee: _networkFee,
         onSuccess: (result) {
           Navigator.pop(context);
           Navigator.push(
@@ -446,6 +456,16 @@ class _TransferCryptoScreenState extends State<TransferCryptoScreen> {
         style: const TextStyle(
             fontSize: 12, color: _kBlue, fontWeight: FontWeight.w600),
       ));
+      if (_networkFee > 0) {
+        lines.add(Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            'Recipient gets ${formatCoinQty(_receiveQty)} ${token.symbol} '
+            'after the ${formatCoinQty(_networkFee)} ${token.symbol} network fee',
+            style: const TextStyle(fontSize: 12, color: _kDark),
+          ),
+        ));
+      }
     }
     if (token != null) {
       final minText = _minQty > 0
@@ -778,6 +798,7 @@ class _TransferSummaryDialog extends StatefulWidget {
   final String network;
   final String address;
   final double qty;
+  final double networkFee;
   final ValueChanged<WithdrawalResult> onSuccess;
   final VoidCallback onCancel;
 
@@ -786,6 +807,7 @@ class _TransferSummaryDialog extends StatefulWidget {
     required this.network,
     required this.address,
     required this.qty,
+    required this.networkFee,
     required this.onSuccess,
     required this.onCancel,
   });
@@ -912,6 +934,18 @@ class _TransferSummaryDialogState extends State<_TransferSummaryDialog> {
                           widget.network.isEmpty ? 'Default' : widget.network),
                   const _SDivider(),
                   _SRow(label: 'Amount:', value: amtStr),
+                  if (widget.networkFee > 0) ...[
+                    const _SDivider(),
+                    _SRow(
+                        label: 'Network fee:',
+                        value:
+                            '${formatCoinQty(widget.networkFee)} ${widget.coin.symbol}'),
+                    const _SDivider(),
+                    _SRow(
+                        label: 'Recipient gets:',
+                        value:
+                            '${formatCoinQty(floorCoinQty(widget.qty - widget.networkFee))} ${widget.coin.symbol}'),
+                  ],
                 ],
               ),
             ),

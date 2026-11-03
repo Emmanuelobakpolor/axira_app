@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/crypto_service.dart';
+import '../../utils/fiat_format.dart';
 
 const _kBlue = Color(0xFF0E24A0);
 const _kDark = Color(0xFF111827);
@@ -76,12 +77,7 @@ class _TransferSuccessScreenState extends State<TransferSuccessScreen> {
     return '${a.substring(0, 9)}.......${a.substring(a.length - 5)}';
   }
 
-  String get _amtStr {
-    final n = result.amount % 1 == 0
-        ? result.amount.toStringAsFixed(0)
-        : result.amount.toString();
-    return '$n ${result.coin}';
-  }
+  String _coinStr(double v) => '${formatCoinQty(v)} ${result.coin}';
 
   String get _dateStr {
     final d = DateTime.tryParse(result.createdAt);
@@ -186,12 +182,12 @@ class _TransferSuccessScreenState extends State<TransferSuccessScreen> {
                       const SizedBox(height: 12),
                     ],
                     const Text(
-                      'You sent',
+                      'Recipient gets',
                       style: TextStyle(fontSize: 14, color: _kGrey),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _amtStr,
+                      _coinStr(result.receiveAmount),
                       style: const TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.bold,
@@ -218,12 +214,15 @@ class _TransferSuccessScreenState extends State<TransferSuccessScreen> {
                                   ? 'Default'
                                   : result.network),
                           const _Divider(),
-                          _Row(label: 'Amount:', value: _amtStr),
+                          _Row(label: 'Amount:', value: _coinStr(result.amount)),
                           const _Divider(),
                           _Row(
                               label: 'Network Fee',
-                              value:
-                                  '${result.fee} ${result.coin}'),
+                              value: _coinStr(result.networkFee)),
+                          const _Divider(),
+                          _Row(
+                              label: 'Recipient Gets',
+                              value: _coinStr(result.receiveAmount)),
                           const _Divider(),
                           _Row(label: 'Status', value: _statusLabel),
                           if (result.txId.isNotEmpty) ...[

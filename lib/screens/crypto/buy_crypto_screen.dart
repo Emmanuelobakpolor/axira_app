@@ -136,6 +136,12 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
     return _isBuy ? _rate * (1 + pct) : _rate * (1 - pct);
   }
 
+  /// Naira per $1 after Axira's fee, the only rate customers are shown.
+  double get _axiraUsdRate {
+    final usd = _coin?.priceUsd ?? 0;
+    return usd > 0 ? _effectiveRate / usd : 0;
+  }
+
   double get _minQty =>
       _rate > 0 ? _limits.minOrderNgn / _rate : 0;
 
@@ -198,6 +204,7 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
           quote: quote,
           token: _token!,
           qty: _qty,
+          marketNgnPerUsd: _coin?.ngnPerUsd ?? 0,
           onConfirm: () => Navigator.pop(context),
           onCancel: () => Navigator.pop(context),
         ),
@@ -329,10 +336,8 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
 
                 // ── Rate (fee included) ───────────────────────────────────
                 _InfoBox(
-                    label: 'Your rate',
-                    value: _effectiveRate == 0
-                        ? '—'
-                        : '₦${_fmtNum(_effectiveRate)} / $_token'),
+                    label: 'Axira rate (fee included)',
+                    value: formatUsdRate(_axiraUsdRate)),
                 const SizedBox(height: 10),
 
                 // ── Total ─────────────────────────────────────────────────
@@ -660,8 +665,8 @@ class _TokenSheetState extends State<_TokenSheet> {
                                 Text(coin.name,
                                     style: const TextStyle(
                                         fontSize: 14, color: _kDark)),
-                                if (coin.priceNgn > 0)
-                                  Text('₦${_fmtNum(coin.priceNgn)}',
+                                if (coin.priceUsd > 0)
+                                  Text(formatUsdPrice(coin.priceUsd),
                                       style: const TextStyle(
                                           fontSize: 12, color: _kGrey)),
                               ],
@@ -688,6 +693,7 @@ class _OrderSheet extends StatefulWidget {
   final bool isBuy;
   final String token;
   final double qty;
+  final double marketNgnPerUsd;
   final CryptoQuote quote;
   final VoidCallback onConfirm;
   final VoidCallback onCancel;
@@ -696,6 +702,7 @@ class _OrderSheet extends StatefulWidget {
     required this.isBuy,
     required this.token,
     required this.qty,
+    required this.marketNgnPerUsd,
     required this.quote,
     required this.onConfirm,
     required this.onCancel,
@@ -1010,8 +1017,8 @@ class _OrderSheetState extends State<_OrderSheet> {
           ),
         _OrderRow(label: 'Token:', value: widget.token),
         _OrderRow(
-            label: 'Your rate:',
-            value: '₦${_fmtNum(q.effectiveRateNgn)} / ${widget.token}'),
+            label: 'Axira rate (fee included):',
+            value: formatUsdRate(q.effectiveUsdRate(widget.marketNgnPerUsd))),
         _OrderRow(
             label: 'Quantity:',
             value: '${formatCoinQty(widget.qty)} ${widget.token}'),

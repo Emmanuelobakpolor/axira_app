@@ -3,6 +3,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../services/auth_service.dart';
 import '../../services/crypto_service.dart';
 import '../../services/wallet_service.dart';
+import '../../utils/fiat_format.dart';
 import 'auth/sign_in_screen.dart';
 import '../../widgets/profile_avatar.dart';
 import '../../widgets/coin_logo.dart';
@@ -931,7 +932,7 @@ class _CoinBadge extends StatelessWidget {
 class _PortfolioCard extends StatelessWidget {
   final String name;
   final String ticker;
-  final String priceNgn;
+  final String priceUsd;
   final Color coinColor;
   final String letter;
   final String? logoUrl;
@@ -939,28 +940,17 @@ class _PortfolioCard extends StatelessWidget {
   const _PortfolioCard({
     required this.name,
     required this.ticker,
-    required this.priceNgn,
+    required this.priceUsd,
     required this.coinColor,
     required this.letter,
     required this.logoUrl,
   });
 
   factory _PortfolioCard.fromCoin(CoinInfo coin) {
-    final price = coin.priceNgn;
-    String formatted;
-    if (price == 0) {
-      formatted = '—';
-    } else if (price >= 1000000) {
-      formatted = '₦${(price / 1000000).toStringAsFixed(2)}M';
-    } else if (price >= 1000) {
-      formatted = '₦${(price / 1000).toStringAsFixed(2)}K';
-    } else {
-      formatted = '₦${price.toStringAsFixed(2)}';
-    }
     return _PortfolioCard(
       name: coin.name,
       ticker: coin.symbol,
-      priceNgn: formatted,
+      priceUsd: coin.priceUsd == 0 ? '—' : formatUsdPrice(coin.priceUsd),
       coinColor: coin.color,
       letter: coin.letter,
       logoUrl: coin.logoUrl,
@@ -1006,12 +996,18 @@ class _PortfolioCard extends StatelessWidget {
           Text(ticker,
               style: const TextStyle(fontSize: 13, color: _kGrey)),
           const SizedBox(height: 10),
-          Text(
-            priceNgn,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: _kDark,
+          // Very small coin prices run long ($0.000000001295), so shrink to fit.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              priceUsd,
+              maxLines: 1,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: _kDark,
+              ),
             ),
           ),
           const SizedBox(height: 4),

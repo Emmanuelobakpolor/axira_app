@@ -59,6 +59,9 @@ class CoinInfo {
       priceUsd: double.tryParse(json['price_usd']?.toString() ?? '') ?? 0,
     );
   }
+
+  /// Naira per dollar implied by this coin's market prices, before fees.
+  double get ngnPerUsd => priceUsd > 0 ? priceNgn / priceUsd : 0;
 }
 
 class CryptoPricesData {
@@ -136,6 +139,12 @@ class CryptoQuote {
   /// pays per coin on a buy, or receives per coin on a sell.
   double get effectiveRateNgn =>
       coinAmount > 0 ? totalNgn / coinAmount : rateNgn;
+
+  /// Naira per $1 with Axira's fee folded in, given the coin's market
+  /// [ngnPerUsd]. The quote only carries naira prices, so this applies the
+  /// quote's fee to the market dollar rate.
+  double effectiveUsdRate(double ngnPerUsd) =>
+      rateNgn > 0 ? ngnPerUsd * effectiveRateNgn / rateNgn : 0;
 }
 
 /// Minimums and the daily transfer cap, from GET /crypto/limits/.
@@ -145,6 +154,7 @@ class CryptoLimits {
   final double withdrawDailyLimitNgn;
   final double withdrawRemainingTodayNgn;
   final Map<String, double> withdrawMinAmounts;
+  final Map<String, double> withdrawNetworkFees;
 
   const CryptoLimits({
     this.minOrderNgn = 1000,
@@ -152,27 +162,39 @@ class CryptoLimits {
     this.withdrawDailyLimitNgn = 0,
     this.withdrawRemainingTodayNgn = 0,
     this.withdrawMinAmounts = const {},
+    this.withdrawNetworkFees = const {},
   });
 
   factory CryptoLimits.fromJson(Map<String, dynamic> json) {
     double d(String k, double fallback) =>
         double.tryParse(json[k]?.toString() ?? '') ?? fallback;
-    final mins = (json['withdraw_min_amounts'] as Map<String, dynamic>?) ?? {};
+    Map<String, double> amounts(String k) =>
+        ((json[k] as Map<String, dynamic>?) ?? {}).map(
+            (k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0));
     return CryptoLimits(
       minOrderNgn: d('min_order_ngn', 1000),
       withdrawMinNgn: d('withdraw_min_ngn', 1000),
       withdrawDailyLimitNgn: d('withdraw_daily_limit_ngn', 0),
       withdrawRemainingTodayNgn: d('withdraw_remaining_today_ngn', 0),
-      withdrawMinAmounts: mins.map(
-          (k, v) => MapEntry(k, double.tryParse(v.toString()) ?? 0)),
+      withdrawMinAmounts: amounts('withdraw_min_amounts'),
+      withdrawNetworkFees: amounts('withdraw_network_fees'),
     );
   }
 
-  /// Smallest amount of [coin] that can be sent at [priceNgn]: the larger
-  /// of Quidax's per-coin minimum and the NGN minimum.
-  double withdrawMinCoin(String coin, double priceNgn) {
+  /// Network fee deducted from a [coin] send on [network] (empty for the
+  /// coin's default network). A preview — the backend charges the exact fee.
+  double networkFee(String coin, String network) =>
+      (network.isNotEmpty ? withdrawNetworkFees['$coin:$network'] : null) ??
+      withdrawNetworkFees[coin] ??
+      0;
+
+  /// Smallest amount of [coin] a customer can enter at [priceNgn]: enough
+  /// that what's left after the network fee meets Quidax's minimum, and
+  /// at least the NGN minimum.
+  double withdrawMinCoin(String coin, double priceNgn, {String network = ''}) {
     final fromNgn = priceNgn > 0 ? withdrawMinNgn / priceNgn : 0.0;
-    final fromCoin = withdrawMinAmounts[coin] ?? 0;
+    final fromCoin =
+        (withdrawMinAmounts[coin] ?? 0) + networkFee(coin, network);
     return fromNgn > fromCoin ? fromNgn : fromCoin;
   }
 }
@@ -417,6 +439,8 @@ class WithdrawalResult {
   final String network;
   final String address;
   final double amount;
+  final double networkFee;
+  final double receiveAmount;
   final double fee;
   final String status;
   final String txId;
@@ -429,6 +453,8 @@ class WithdrawalResult {
     required this.network,
     required this.address,
     required this.amount,
+    this.networkFee = 0,
+    required this.receiveAmount,
     required this.fee,
     required this.status,
     required this.txId,
@@ -443,6 +469,12 @@ class WithdrawalResult {
         network: json['network']?.toString() ?? '',
         address: json['address']?.toString() ?? '',
         amount: double.tryParse(json['amount'].toString()) ?? 0,
+        networkFee:
+            double.tryParse(json['network_fee']?.toString() ?? '0') ?? 0,
+        receiveAmount: double.tryParse(
+                json['receive_amount']?.toString() ?? '') ??
+            double.tryParse(json['amount'].toString()) ??
+            0,
         fee: double.tryParse(json['fee']?.toString() ?? '0') ?? 0,
         status: json['status'] as String,
         txId: json['tx_id']?.toString() ?? '',

@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import '../services/crypto_service.dart';
 
 String _withCommas(String intPart) => intPart.replaceAllMapped(
@@ -14,6 +16,21 @@ String formatUsd(double v) {
   final parts = v.toStringAsFixed(2).split('.');
   return '\$${_withCommas(parts[0])}.${parts[1]}';
 }
+
+/// USD price per coin. Sub-dollar coins keep 4 significant figures so they
+/// don't round to $0.00, e.g. 0.00835 → "$0.00835", 76800.92 → "$76,800.92".
+String formatUsdPrice(double v) {
+  if (v >= 1 || v <= 0) return formatUsd(v);
+  final decimals = ((-log(v) / ln10).ceil() + 3).clamp(2, 20);
+  final s = v
+      .toStringAsFixed(decimals)
+      .replaceFirst(RegExp(r'(?<=\.\d\d\d*?)0+$'), '');
+  return '\$$s';
+}
+
+/// "$1 = ₦1,376.40" for a naira-per-dollar rate, or '—' if it isn't known.
+String formatUsdRate(double ngnPerUsd) =>
+    ngnPerUsd > 0 ? '\$1 = ${formatNgn(ngnPerUsd)}' : '—';
 
 /// "≈ $12.50 · ₦20,000.00" for [qty] of [coin], or '' if no price is known.
 String fiatValueLine(double qty, CoinInfo? coin) {
