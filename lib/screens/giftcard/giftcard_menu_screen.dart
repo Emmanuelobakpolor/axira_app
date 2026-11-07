@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../utils/features.dart';
+import '../../widgets/coming_soon.dart';
 import 'buy_giftcard_screen.dart';
 import 'sell_giftcard_screen.dart';
 import 'trade_history_screen.dart';
@@ -18,11 +20,14 @@ class GiftcardMenuScreen extends StatelessWidget {
             _MenuItem(
               icon: Icons.card_giftcard_outlined,
               label: 'Buy Giftcard',
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const BuyGiftcardScreen()),
-              ),
+              comingSoon: !kBuyGiftcardEnabled,
+              onTap: () => kBuyGiftcardEnabled
+                  ? Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const BuyGiftcardScreen()),
+                    )
+                  : showComingSoon(context, 'Buying gift cards'),
             ),
             _MenuItem(
               icon: Icons.sell_outlined,
@@ -77,9 +82,14 @@ class _MenuItem extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final bool comingSoon;
 
-  const _MenuItem(
-      {required this.icon, required this.label, required this.onTap});
+  const _MenuItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.comingSoon = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -115,6 +125,10 @@ class _MenuItem extends StatelessWidget {
                     fontWeight: FontWeight.w500),
               ),
             ),
+            if (comingSoon) ...[
+              const ComingSoonBadge(),
+              const SizedBox(width: 6),
+            ],
             const Icon(Icons.chevron_right,
                 color: Color(0xFF9CA3AF), size: 22),
           ],

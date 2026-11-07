@@ -7,6 +7,8 @@ import '../../utils/fiat_format.dart';
 import 'auth/sign_in_screen.dart';
 import '../../widgets/profile_avatar.dart';
 import '../../widgets/coin_logo.dart';
+import '../../widgets/coming_soon.dart';
+import '../../utils/features.dart';
 import 'giftcard/giftcard_menu_screen.dart';
 import 'crypto/buy_crypto_screen.dart';
 import 'crypto/transfer_crypto_screen.dart';
@@ -422,11 +424,12 @@ Widget _buildQuickLinks() {
       label: 'Swap',
       icon: FontAwesomeIcons.rightLeft,
       screen: SwapCryptoScreen(),
+      enabled: kSwapCryptoEnabled,
     ),
     _QuickLinkData(
-      label: 'Buy & Sell',
+      label: kBuyCryptoEnabled ? 'Buy & Sell' : 'Sell',
       icon: FontAwesomeIcons.creditCard,
-      screen: BuyCryptoScreen(),
+      screen: BuyCryptoScreen(initialSell: !kBuyCryptoEnabled),
     ),
   ];
 
@@ -448,35 +451,50 @@ Widget _buildQuickLinks() {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: links.map((link) {
             return GestureDetector(
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => link.screen),
-              ),
+              onTap: () => link.enabled
+                  ? Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => link.screen),
+                    )
+                  : showComingSoon(context, link.label),
               child: SizedBox(
                 width: 72,
                 child: Column(
                   children: [
-                    Container(
-                      width: 58,
-                      height: 58,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF5F7FB),
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Container(
+                          width: 58,
+                          height: 58,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF5F7FB),
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      child: Center(
-                        child: Icon(
-                          link.icon,
-                          size: 22,
-                          color: const Color(0xFF2457F5),
+                          child: Center(
+                            child: Icon(
+                              link.icon,
+                              size: 22,
+                              color: link.enabled
+                                  ? const Color(0xFF2457F5)
+                                  : _kGrey,
+                            ),
+                          ),
                         ),
-                      ),
+                        if (!link.enabled)
+                          const Positioned(
+                            top: -4,
+                            right: -8,
+                            child: ComingSoonBadge(),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 10),
                     Text(
@@ -570,12 +588,16 @@ Widget _buildQuickLinks() {
                 ),
               ),
               const SizedBox(width: 12),
-              // Buy Crypto
+              // Buy / Sell Crypto
               Expanded(
                 child: GestureDetector(
                   onTap: () => Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const BuyCryptoScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const BuyCryptoScreen(
+                        initialSell: !kBuyCryptoEnabled,
+                      ),
+                    ),
                   ),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
@@ -625,7 +647,7 @@ Widget _buildQuickLinks() {
                         const SizedBox(width: 6),
                         const Flexible(
                           child: Text(
-                            'Buy Crypto',
+                            kBuyCryptoEnabled ? 'Buy Crypto' : 'Sell Crypto',
                             style: TextStyle(
                               fontSize: 15,
                               color: _kDark,
@@ -833,12 +855,14 @@ class _QuickLinkData {
   final IconData icon;
   final Widget screen;
   final bool highlighted;
+  final bool enabled;
 
   const _QuickLinkData({
     required this.label,
     required this.icon,
     required this.screen,
     this.highlighted = false,
+    this.enabled = true,
   });
 }
 

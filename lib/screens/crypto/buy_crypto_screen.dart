@@ -9,9 +9,11 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../services/auth_service.dart' show AuthException;
 import '../../services/crypto_service.dart';
+import '../../utils/features.dart';
 import '../../utils/fiat_format.dart';
 import '../../utils/session_guard.dart';
 import '../../widgets/coin_logo.dart';
+import '../../widgets/coming_soon.dart';
 import '../../widgets/crypto_amount_field.dart';
 import '../../widgets/error_banner.dart';
 import '../../widgets/error_snackbar.dart';
@@ -55,7 +57,7 @@ class BuyCryptoScreen extends StatefulWidget {
 }
 
 class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
-  late bool _isBuy = !widget.initialSell;
+  late bool _isBuy = kBuyCryptoEnabled && !widget.initialSell;
   late String? _token = widget.initialCoin;
   final _amount = CryptoAmountController();
 
@@ -266,7 +268,9 @@ class _BuyCryptoScreenState extends State<BuyCryptoScreen> {
               children: [
                 _BuySellToggle(
                   isBuy: _isBuy,
-                  onBuy: () => setState(() => _isBuy = true),
+                  onBuy: kBuyCryptoEnabled
+                      ? () => setState(() => _isBuy = true)
+                      : () => showComingSoon(context, 'Buying crypto'),
                   onSell: () => setState(() => _isBuy = false),
                 ),
                 const SizedBox(height: 24),
@@ -504,7 +508,12 @@ class _BuySellToggle extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _Tab(label: 'Buy Crypto', active: isBuy, onTap: onBuy),
+          _Tab(
+            label: 'Buy Crypto',
+            active: isBuy,
+            onTap: onBuy,
+            comingSoon: !kBuyCryptoEnabled,
+          ),
           _Tab(label: 'Sell Crypto', active: !isBuy, onTap: onSell),
         ],
       ),
@@ -516,8 +525,14 @@ class _Tab extends StatelessWidget {
   final String label;
   final bool active;
   final VoidCallback onTap;
+  final bool comingSoon;
 
-  const _Tab({required this.label, required this.active, required this.onTap});
+  const _Tab({
+    required this.label,
+    required this.active,
+    required this.onTap,
+    this.comingSoon = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -532,13 +547,22 @@ class _Tab extends StatelessWidget {
             borderRadius: BorderRadius.circular(20),
           ),
           alignment: Alignment.center,
-          child: Text(
-            label,
-            style: TextStyle(
-              color: active ? Colors.white : _kGrey,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: active ? Colors.white : _kGrey,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (comingSoon) ...[
+                const SizedBox(width: 6),
+                const ComingSoonBadge(),
+              ],
+            ],
           ),
         ),
       ),

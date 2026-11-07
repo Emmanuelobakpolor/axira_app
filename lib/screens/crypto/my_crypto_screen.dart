@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../services/auth_service.dart' show AuthException;
 import '../../services/crypto_service.dart';
+import '../../utils/features.dart';
 import '../../utils/fiat_format.dart';
 import '../../utils/session_guard.dart';
 import '../../widgets/coin_logo.dart';
 import 'buy_crypto_screen.dart';
+import 'deposit_crypto_screen.dart';
 import 'transfer_crypto_screen.dart';
 
 const _kBlue = Color(0xFF0E24A0);
@@ -472,7 +474,12 @@ class _MyCryptoScreenState extends State<MyCryptoScreen> {
           child: ElevatedButton(
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const BuyCryptoScreen()),
+              // With buying off, the way in is depositing crypto to sell.
+              MaterialPageRoute(
+                builder: (_) => kBuyCryptoEnabled
+                    ? const BuyCryptoScreen()
+                    : const DepositCryptoScreen(),
+              ),
             ),
             style: ElevatedButton.styleFrom(
               backgroundColor: _kBlue,
@@ -482,7 +489,7 @@ class _MyCryptoScreenState extends State<MyCryptoScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             ),
             child: const Text(
-              'Buy Crypto',
+              kBuyCryptoEnabled ? 'Buy Crypto' : 'Receive Crypto',
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w600,
