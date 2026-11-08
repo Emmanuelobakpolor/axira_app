@@ -146,6 +146,16 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                         ),
                       ),
                     ),
+                    const SizedBox(height: 4),
+                    // Gmail still files mail from our new sending domain
+                    // under Spam until it builds a reputation.
+                    const Center(
+                      child: Text(
+                        "Can't find it? Check your Spam or Promotions folder.",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 13, color: kAuthTextGrey),
+                      ),
+                    ),
                   ],
                 ),
               ),
