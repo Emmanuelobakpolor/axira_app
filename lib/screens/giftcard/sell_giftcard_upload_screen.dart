@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../services/giftcard_service.dart';
 import '../../widgets/brand_image.dart';
 import '../../widgets/error_snackbar.dart';
 import 'sell_giftcard_confirm_screen.dart';
@@ -15,19 +16,15 @@ const _kGrey = Color(0xFF9CA3AF);
 class SellGiftcardUploadScreen extends StatefulWidget {
   final String brandName;
   final String brandAsset;
-  final String country;
-  final String cardType;
+  final GiftSellRate rate;
   final double amountUsd;
-  final double rateNgn;
 
   const SellGiftcardUploadScreen({
     super.key,
     required this.brandName,
     required this.brandAsset,
-    required this.country,
-    required this.cardType,
+    required this.rate,
     required this.amountUsd,
-    required this.rateNgn,
   });
 
   @override
@@ -183,10 +180,8 @@ class _SellGiftcardUploadScreenState extends State<SellGiftcardUploadScreen> {
                             builder: (_) => SellGiftcardConfirmScreen(
                               brandName: widget.brandName,
                               brandAsset: widget.brandAsset,
-                              country: widget.country,
-                              cardType: widget.cardType,
+                              rate: widget.rate,
                               amountUsd: widget.amountUsd,
-                              rateNgn: widget.rateNgn,
                               images: List.unmodifiable(_images),
                             ),
                           ),

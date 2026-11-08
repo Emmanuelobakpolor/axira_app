@@ -13,20 +13,16 @@ const _kGrey = Color(0xFF9CA3AF);
 class SellGiftcardConfirmScreen extends StatefulWidget {
   final String brandName;
   final String brandAsset;
-  final String country;
-  final String cardType;
+  final GiftSellRate rate;
   final double amountUsd;
-  final double rateNgn;
   final List<File> images;
 
   const SellGiftcardConfirmScreen({
     super.key,
     required this.brandName,
     required this.brandAsset,
-    required this.country,
-    required this.cardType,
+    required this.rate,
     required this.amountUsd,
-    required this.rateNgn,
     required this.images,
   });
 
@@ -39,7 +35,7 @@ class _SellGiftcardConfirmScreenState extends State<SellGiftcardConfirmScreen> {
   bool _loading = false;
   String? _error;
 
-  double get _naira => widget.amountUsd * widget.rateNgn;
+  double get _naira => widget.amountUsd * widget.rate.rateNgn;
 
   Future<void> _submit() async {
     setState(() { _loading = true; _error = null; });
@@ -47,8 +43,8 @@ class _SellGiftcardConfirmScreenState extends State<SellGiftcardConfirmScreen> {
       final ref = await GiftCardService.submitSell(
         brand: widget.brandName,
         brandAsset: widget.brandAsset,
-        country: widget.country,
-        cardType: widget.cardType,
+        country: widget.rate.country,
+        cardType: widget.rate.cardType,
         amountUsd: widget.amountUsd,
         images: widget.images,
       );
@@ -128,13 +124,19 @@ class _SellGiftcardConfirmScreenState extends State<SellGiftcardConfirmScreen> {
                             ),
                             const _Divider(),
                             _Row(
+                              label: 'Rate',
+                              value:
+                                  '₦${widget.rate.rateNgn.toStringAsFixed(0)} per \$1',
+                            ),
+                            const _Divider(),
+                            _Row(
                               label: 'Country',
-                              value: widget.country,
+                              value: widget.rate.countryName,
                             ),
                             const _Divider(),
                             _Row(
                               label: 'Card Type',
-                              value: widget.cardType,
+                              value: widget.rate.cardTypeLabel,
                             ),
                             const _Divider(),
                             const _Row(

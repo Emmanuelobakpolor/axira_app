@@ -11,14 +11,27 @@ const _kGrey = Color(0xFF9CA3AF);
 const _kFieldBg = Color(0xFFF5F6FA);
 const _kBorder = Color(0xFFE5E7EB);
 
+String _fmtUsd(double v) =>
+    v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+
+String _fmtNgn(double v) {
+  final s = v.toStringAsFixed(0);
+  return s.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+}
+
 class SellGiftcardFormScreen extends StatefulWidget {
   final String brandName;
   final String brandAsset;
+
+  /// Every active rate for this brand, across countries, card types and
+  /// value bands.
+  final List<GiftSellRate> rates;
 
   const SellGiftcardFormScreen({
     super.key,
     required this.brandName,
     required this.brandAsset,
+    required this.rates,
   });
 
   @override
@@ -26,23 +39,16 @@ class SellGiftcardFormScreen extends StatefulWidget {
 }
 
 class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
-  String _country = 'United State of America';
-  String _countryFlag = 'assets/USA.png';
+  String? _country;
   String _cardType = '';
-  double _rate = 1700;
   final _amountController = TextEditingController();
-
-  static const _countries = [
-    ('United State of America', 'assets/USA.png'),
-    ('Canada', 'assets/CANADA.png'),
-  ];
-
-  static const _cardTypes = ['Physical Card', 'E-Code', 'Digital Card'];
 
   @override
   void initState() {
     super.initState();
-    _loadRate();
+    // Skip a pick when there's only one option.
+    final countries = _countries;
+    if (countries.length == 1) _selectCountry(countries.first.code);
   }
 
   @override
@@ -51,21 +57,47 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
     super.dispose();
   }
 
-  Future<void> _loadRate() async {
-    try {
-      final r = await GiftCardService.getRate();
-      if (mounted) setState(() => _rate = r);
-    } catch (_) {}
+  List<({String code, String name, String flag})> get _countries {
+    final seen = <String>{};
+    return [
+      for (final r in widget.rates)
+        if (seen.add(r.country))
+          (code: r.country, name: r.countryName, flag: r.flag),
+    ];
   }
 
-  double get _nairaAmount {
-    final v = double.tryParse(_amountController.text) ?? 0;
-    return v * _rate;
+  List<({String value, String label})> get _cardTypes {
+    final seen = <String>{};
+    return [
+      for (final r in widget.rates)
+        if (r.country == _country && seen.add(r.cardType))
+          (value: r.cardType, label: r.cardTypeLabel),
+    ];
   }
 
-  bool get _canProceed {
-    final v = double.tryParse(_amountController.text);
-    return _cardType.isNotEmpty && v != null && v >= 1;
+  /// Value bands for the chosen country + card type, lowest first.
+  List<GiftSellRate> get _bands => widget.rates
+      .where((r) => r.country == _country && r.cardType == _cardType)
+      .toList()
+    ..sort((a, b) => a.minUsd.compareTo(b.minUsd));
+
+  double? get _amount => double.tryParse(_amountController.text);
+
+  GiftSellRate? get _matchedRate {
+    final v = _amount;
+    if (v == null) return null;
+    for (final r in _bands.reversed) {
+      if (r.covers(v)) return r;
+    }
+    return null;
+  }
+
+  bool get _canProceed => _matchedRate != null;
+
+  void _selectCountry(String code) {
+    _country = code;
+    final types = _cardTypes;
+    _cardType = types.length == 1 ? types.first.value : '';
   }
 
   void _showCountrySheet() {
@@ -78,11 +110,8 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
       builder: (_) => _CountrySheet(
         countries: _countries,
         selected: _country,
-        onSelect: (name, flag) {
-          setState(() {
-            _country = name;
-            _countryFlag = flag;
-          });
+        onSelect: (code) {
+          setState(() => _selectCountry(code));
           Navigator.pop(context);
         },
       ),
@@ -90,6 +119,7 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
   }
 
   void _showCardTypeSheet() {
+    if (_country == null) return;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
@@ -107,8 +137,40 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
     );
   }
 
+  /// Rate line under the amount field: the matched rate, or the accepted
+  /// value range when the amount doesn't fit any band.
+  Widget _buildRateInfo() {
+    final bands = _bands;
+    if (bands.isEmpty) return const SizedBox.shrink();
+
+    final matched = _matchedRate;
+    final String text;
+    final Color color;
+    if (matched != null) {
+      text = 'Rate: ₦${_fmtNgn(matched.rateNgn)} per \$1';
+      color = const Color(0xFF047857);
+    } else {
+      final ranges = bands
+          .map((b) => '\$${_fmtUsd(b.minUsd)}–\$${_fmtUsd(b.maxUsd)}')
+          .join(', ');
+      text = _amount == null
+          ? 'Accepted card values: $ranges'
+          : "We don't buy this card at this value. Accepted: $ranges";
+      color = _amount == null ? _kGrey : const Color(0xFFB91C1C);
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Text(text, style: TextStyle(fontSize: 12, color: color)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final country = _countries.where((c) => c.code == _country).firstOrNull;
+    final cardType = _cardTypes.where((t) => t.value == _cardType).firstOrNull;
+    final matched = _matchedRate;
+    final naira = matched == null ? 0.0 : (_amount ?? 0) * matched.rateNgn;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -144,12 +206,18 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
                     onTap: _showCountrySheet,
                     child: Row(
                       children: [
-                        Image.asset(_countryFlag,
-                            width: 24, height: 24, fit: BoxFit.cover),
-                        const SizedBox(width: 10),
+                        if (country != null) ...[
+                          Text(country.flag,
+                              style: const TextStyle(fontSize: 20)),
+                          const SizedBox(width: 10),
+                        ],
                         Expanded(
-                          child: Text(_country,
-                              style: const TextStyle(fontSize: 14, color: _kDark)),
+                          child: Text(
+                            country?.name ?? 'Select country',
+                            style: TextStyle(
+                                fontSize: 14,
+                                color: country == null ? _kGrey : _kDark),
+                          ),
                         ),
                         const Icon(Icons.keyboard_arrow_down, color: _kGrey),
                       ],
@@ -165,10 +233,13 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
                       children: [
                         Expanded(
                           child: Text(
-                            _cardType.isEmpty ? 'Select card type' : _cardType,
+                            cardType?.label ??
+                                (_country == null
+                                    ? 'Select a country first'
+                                    : 'Select card type'),
                             style: TextStyle(
                                 fontSize: 14,
-                                color: _cardType.isEmpty ? _kGrey : _kDark),
+                                color: cardType == null ? _kGrey : _kDark),
                           ),
                         ),
                         const Icon(Icons.keyboard_arrow_down, color: _kGrey),
@@ -182,7 +253,7 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
                     children: [
                       const _FieldLabel('Card Value (\$)'),
                       Text(
-                        'In Naira: ₦${_nairaAmount.toStringAsFixed(0)}',
+                        'You get: ₦${_fmtNgn(naira)}',
                         style: const TextStyle(fontSize: 12, color: _kGrey),
                       ),
                     ],
@@ -195,6 +266,7 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
                     ),
                     child: TextField(
                       controller: _amountController,
+                      enabled: _cardType.isNotEmpty,
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
                       inputFormatters: [
@@ -218,6 +290,7 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
                       ),
                     ),
                   ),
+                  _buildRateInfo(),
                 ],
               ),
             ),
@@ -236,10 +309,8 @@ class _SellGiftcardFormScreenState extends State<SellGiftcardFormScreen> {
                             builder: (_) => SellGiftcardUploadScreen(
                               brandName: widget.brandName,
                               brandAsset: widget.brandAsset,
-                              country: _country,
-                              cardType: _cardType,
-                              amountUsd: double.parse(_amountController.text),
-                              rateNgn: _rate,
+                              rate: matched!,
+                              amountUsd: _amount!,
                             ),
                           ),
                         )
@@ -356,10 +427,28 @@ class _FieldLabel extends StatelessWidget {
   }
 }
 
-class _CountrySheet extends StatefulWidget {
-  final List<(String, String)> countries;
-  final String selected;
-  final void Function(String name, String flag) onSelect;
+class _SheetHandle extends StatelessWidget {
+  const _SheetHandle();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.only(top: 10, bottom: 16),
+        width: 40,
+        height: 4,
+        decoration: BoxDecoration(
+            color: const Color(0xFFE5E7EB),
+            borderRadius: BorderRadius.circular(2)),
+      ),
+    );
+  }
+}
+
+class _CountrySheet extends StatelessWidget {
+  final List<({String code, String name, String flag})> countries;
+  final String? selected;
+  final ValueChanged<String> onSelect;
 
   const _CountrySheet(
       {required this.countries,
@@ -367,35 +456,13 @@ class _CountrySheet extends StatefulWidget {
       required this.onSelect});
 
   @override
-  State<_CountrySheet> createState() => _CountrySheetState();
-}
-
-class _CountrySheetState extends State<_CountrySheet> {
-  String _query = '';
-
-  @override
   Widget build(BuildContext context) {
-    final filtered = widget.countries
-        .where((c) => c.$1.toLowerCase().contains(_query.toLowerCase()))
-        .toList();
-
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+    return SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(
-            child: Container(
-              margin: const EdgeInsets.only(top: 10, bottom: 16),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                  color: const Color(0xFFE5E7EB),
-                  borderRadius: BorderRadius.circular(2)),
-            ),
-          ),
+          const _SheetHandle(),
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
             child: Text('Select Country',
@@ -404,41 +471,22 @@ class _CountrySheetState extends State<_CountrySheet> {
                     fontWeight: FontWeight.bold,
                     color: _kDark)),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-            child: TextField(
-              onChanged: (v) => setState(() => _query = v),
-              style: const TextStyle(fontSize: 14),
-              decoration: InputDecoration(
-                hintText: 'Search Country',
-                hintStyle:
-                    const TextStyle(color: Color(0xFFB0B7C3), fontSize: 14),
-                prefixIcon: const Icon(Icons.search,
-                    color: Color(0xFFB0B7C3), size: 18),
-                filled: true,
-                fillColor: _kFieldBg,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-            ),
-          ),
-          ...filtered.map((c) => InkWell(
-                onTap: () => widget.onSelect(c.$1, c.$2),
+          ...countries.map((c) => InkWell(
+                onTap: () => onSelect(c.code),
                 child: Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                   child: Row(
                     children: [
-                      Image.asset(c.$2,
-                          width: 28, height: 28, fit: BoxFit.cover),
+                      Text(c.flag, style: const TextStyle(fontSize: 22)),
                       const SizedBox(width: 12),
-                      Text(c.$1,
-                          style:
-                              const TextStyle(fontSize: 14, color: _kDark)),
+                      Expanded(
+                        child: Text(c.name,
+                            style:
+                                const TextStyle(fontSize: 14, color: _kDark)),
+                      ),
+                      if (c.code == selected)
+                        const Icon(Icons.check, color: _kBlue, size: 18),
                     ],
                   ),
                 ),
@@ -450,8 +498,8 @@ class _CountrySheetState extends State<_CountrySheet> {
   }
 }
 
-class _CardTypeSheet extends StatefulWidget {
-  final List<String> cardTypes;
+class _CardTypeSheet extends StatelessWidget {
+  final List<({String value, String label})> cardTypes;
   final String selected;
   final ValueChanged<String> onSelect;
 
@@ -461,35 +509,13 @@ class _CardTypeSheet extends StatefulWidget {
       required this.onSelect});
 
   @override
-  State<_CardTypeSheet> createState() => _CardTypeSheetState();
-}
-
-class _CardTypeSheetState extends State<_CardTypeSheet> {
-  String _query = '';
-
-  @override
   Widget build(BuildContext context) {
-    final filtered = widget.cardTypes
-        .where((t) => t.toLowerCase().contains(_query.toLowerCase()))
-        .toList();
-
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+    return SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(
-            child: Container(
-              margin: const EdgeInsets.only(top: 10, bottom: 16),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                  color: const Color(0xFFE5E7EB),
-                  borderRadius: BorderRadius.circular(2)),
-            ),
-          ),
+          const _SheetHandle(),
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
             child: Text('Select Card Type',
@@ -498,38 +524,18 @@ class _CardTypeSheetState extends State<_CardTypeSheet> {
                     fontWeight: FontWeight.bold,
                     color: _kDark)),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: TextField(
-              onChanged: (v) => setState(() => _query = v),
-              style: const TextStyle(fontSize: 14),
-              decoration: InputDecoration(
-                hintText: 'Search',
-                hintStyle:
-                    const TextStyle(color: Color(0xFFB0B7C3), fontSize: 14),
-                filled: true,
-                fillColor: _kFieldBg,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-            ),
-          ),
-          ...filtered.map((type) => InkWell(
-                onTap: () => widget.onSelect(type),
+          ...cardTypes.map((t) => InkWell(
+                onTap: () => onSelect(t.value),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 20, vertical: 14),
                   child: Row(
                     children: [
                       Expanded(
-                          child: Text(type,
+                          child: Text(t.label,
                               style: const TextStyle(
                                   fontSize: 14, color: _kDark))),
-                      if (type == widget.selected)
+                      if (t.value == selected)
                         const Icon(Icons.check, color: _kBlue, size: 18),
                     ],
                   ),

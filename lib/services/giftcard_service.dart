@@ -153,6 +153,54 @@ class GiftBrand {
       );
 }
 
+/// One card Axira is buying: a brand + country + card type + value band,
+/// and the naira it pays per $1. Set by admins in the dashboard.
+class GiftSellRate {
+  final int id;
+  final String brand;
+  final String logoUrl;
+  final String country; // ISO code, e.g. 'US'
+  final String countryName;
+  final String cardType; // 'physical' or 'ecode'
+  final String cardTypeLabel;
+  final double minUsd;
+  final double maxUsd;
+  final double rateNgn;
+
+  const GiftSellRate({
+    required this.id,
+    required this.brand,
+    required this.logoUrl,
+    required this.country,
+    required this.countryName,
+    required this.cardType,
+    required this.cardTypeLabel,
+    required this.minUsd,
+    required this.maxUsd,
+    required this.rateNgn,
+  });
+
+  factory GiftSellRate.fromJson(Map<String, dynamic> j) => GiftSellRate(
+        id: j['id'] as int,
+        brand: j['brand'] as String,
+        logoUrl: j['logo_url'] as String? ?? '',
+        country: j['country'] as String,
+        countryName: j['country_name'] as String? ?? j['country'] as String,
+        cardType: j['card_type'] as String,
+        cardTypeLabel: j['card_type_label'] as String? ?? j['card_type'] as String,
+        minUsd: double.parse(j['min_usd'].toString()),
+        maxUsd: double.parse(j['max_usd'].toString()),
+        rateNgn: double.parse(j['rate_ngn'].toString()),
+      );
+
+  bool covers(double amountUsd) => amountUsd >= minUsd && amountUsd <= maxUsd;
+
+  /// Flag emoji built from the ISO country code (e.g. 'US' → 🇺🇸).
+  String get flag => String.fromCharCodes(
+        country.toUpperCase().codeUnits.map((c) => 0x1F1E6 + c - 0x41),
+      );
+}
+
 class GiftCardService {
   static String _extractError(http.Response res) {
     if (res.statusCode == 401) return kSessionExpiredError;
@@ -203,6 +251,20 @@ class GiftCardService {
         if (res.statusCode == 200) {
           final body = jsonDecode(res.body) as Map<String, dynamic>;
           return double.parse(body['ngn_per_usd'].toString());
+        }
+        throw GiftCardException(_extractError(res));
+      });
+
+  static Future<List<GiftSellRate>> getSellRates() => _guard(() async {
+        final res = await http.get(
+          Uri.parse('$_kBaseUrl/giftcards/sell-rates/'),
+          headers: await AuthService.authHeaders(),
+        );
+        if (res.statusCode == 200) {
+          final body = jsonDecode(res.body) as Map<String, dynamic>;
+          return (body['rates'] as List)
+              .map((e) => GiftSellRate.fromJson(e as Map<String, dynamic>))
+              .toList();
         }
         throw GiftCardException(_extractError(res));
       });
