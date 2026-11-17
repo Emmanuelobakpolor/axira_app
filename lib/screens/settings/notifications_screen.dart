@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-const _kBlue = Color(0xFF0E24A0);const _kDark = Color(0xFF111827);
+import '../../services/notification_service.dart';
+
+const _kBlue = Color(0xFF0E24A0);
+const _kDark = Color(0xFF111827);
 const _kGrey = Color(0xFF9CA3AF);
 const _kBg = Color(0xFFF2F4F8);
 
@@ -13,47 +16,41 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  // Sample notifications - replace with real data later
-  final List<NotificationItem> _notifications = [
-    NotificationItem(
-      id: 1,
-      title: 'Transaction Successful',
-      body: 'Your withdrawal of 0.045 BTC to wallet ****7890 was successful.',
-      time: '2 min ago',
-      type: NotificationType.transaction,
-      isRead: false,
-    ),
-    NotificationItem(
-      id: 2,
-      title: 'Security Alert',
-      body: 'New login detected from Lagos, Nigeria on your account.',
-      time: '1 hour ago',
-      type: NotificationType.security,
-      isRead: false,
-    ),
-    NotificationItem(
-      id: 3,
-      title: 'Welcome Bonus',
-      body: 'You just received N4000 welcome bonus. Start trading now!',
-      time: 'Yesterday',
-      type: NotificationType.promotion,
-      isRead: true,
-    ),
-    NotificationItem(
-      id: 4,
-      title: 'Deposit Confirmed',
-      body: 'Your deposit of ₦250,000 has been credited to your wallet.',
-      time: 'Yesterday',
-      type: NotificationType.transaction,
-      isRead: true,
-    ),
-  ];
+  final NotificationService _notificationService = NotificationService.instance;
+  List<AppNotification> _notifications = [];
+  bool _loading = true;
 
-  void _markAsRead(int id) {
+  @override
+  void initState() {
+    super.initState();
+    _loadNotifications();
+  }
+
+  Future<void> _loadNotifications() async {
+    final serverNotifications = await _notificationService.fetchServerNotifications();
+    final localNotifications = await _notificationService.getNotifications();
+    final merged = [...serverNotifications, ...localNotifications];
+    final map = <String, AppNotification>{};
+    for (final item in merged) {
+      map[item.id] = item;
+    }
+
+    if (!mounted) return;
     setState(() {
-      final index = _notifications.indexWhere((n) => n.id == id);
-      if (index != -1) _notifications[index].isRead = true;
+      _notifications = map.values.toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      _loading = false;
     });
+  }
+
+  Future<void> _markAsRead(String id) async {
+    await _notificationService.markAsRead(id);
+    await _loadNotifications();
+  }
+
+  Future<void> _markAllRead() async {
+    await _notificationService.markAllRead();
+    await _loadNotifications();
   }
 
   @override
@@ -102,55 +99,51 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ),
         actions: [
           TextButton.icon(
-            onPressed: () {
-              setState(() {
-                for (var n in _notifications) {
-                  n.isRead = true;
-                }
-              });
-              HapticFeedback.lightImpact();
-            },
+            onPressed: _loading ? null : _markAllRead,
             icon: const Icon(Icons.done_all, size: 20),
             label: const Text('Mark all read'),
             style: TextButton.styleFrom(foregroundColor: _kBlue),
           ),
         ],
       ),
-      body: _notifications.isEmpty
+      body: _loading
           ? const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.notifications_none, size: 80, color: _kGrey),
-                  SizedBox(height: 16),
-                  Text(
-                    'No notifications yet',
-                    style: TextStyle(fontSize: 18, color: _kDark),
-                  ),
-                ],
-              ),
+              child: CircularProgressIndicator(color: _kBlue),
             )
-          : ListView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              itemCount: _notifications.length,
-              itemBuilder: (context, index) {
-                final notification = _notifications[index];
-                return _NotificationCard(
-                  notification: notification,
-                  onTap: () {
-                    _markAsRead(notification.id);
-                    HapticFeedback.lightImpact();
-                    // TODO: Navigate to detail or perform action
+          : _notifications.isEmpty
+              ? const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.notifications_none, size: 80, color: _kGrey),
+                      SizedBox(height: 16),
+                      Text(
+                        'No notifications yet',
+                        style: TextStyle(fontSize: 18, color: _kDark),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  itemCount: _notifications.length,
+                  itemBuilder: (context, index) {
+                    final notification = _notifications[index];
+                    return _NotificationCard(
+                      notification: notification,
+                      onTap: () async {
+                        await _markAsRead(notification.id);
+                        HapticFeedback.lightImpact();
+                      },
+                    );
                   },
-                );
-              },
-            ),
+                ),
     );
   }
 }
 
 class _NotificationCard extends StatelessWidget {
-  final NotificationItem notification;
+  final AppNotification notification;
   final VoidCallback onTap;
 
   const _NotificationCard({
@@ -160,24 +153,37 @@ class _NotificationCard extends StatelessWidget {
 
   Color _getIconColor() {
     switch (notification.type) {
-      case NotificationType.transaction:
+      case 'transaction':
         return const Color(0xFF10B981);
-      case NotificationType.security:
+      case 'security':
         return const Color(0xFFEF4444);
-      case NotificationType.promotion:
+      case 'promotion':
+        return _kBlue;
+      default:
         return _kBlue;
     }
   }
 
   IconData _getIcon() {
     switch (notification.type) {
-      case NotificationType.transaction:
+      case 'transaction':
         return Icons.swap_horiz_rounded;
-      case NotificationType.security:
+      case 'security':
         return Icons.security_outlined;
-      case NotificationType.promotion:
+      case 'promotion':
         return Icons.campaign_outlined;
+      default:
+        return Icons.notifications_none_rounded;
     }
+  }
+
+  String _formatTime(DateTime createdAt) {
+    final diff = DateTime.now().difference(createdAt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+    if (diff.inHours < 24) return '${diff.inHours} hr ago';
+    if (diff.inDays < 7) return '${diff.inDays} day ago';
+    return '${createdAt.day}/${createdAt.month}/${createdAt.year}';
   }
 
   @override
@@ -195,7 +201,7 @@ class _NotificationCard extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16),
               border: !notification.isRead
-                  ? Border.all(color: _kBlue.withValues(alpha: 0.2))
+                  ? Border.all(color: _kBlue.withOpacity(0.2))
                   : null,
             ),
             child: Row(
@@ -205,7 +211,7 @@ class _NotificationCard extends StatelessWidget {
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: _getIconColor().withValues(alpha: 0.1),
+                    color: _getIconColor().withOpacity(0.1),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(_getIcon(), color: _getIconColor(), size: 24),
@@ -230,8 +236,8 @@ class _NotificationCard extends StatelessWidget {
                             ),
                           ),
                           Text(
-                            notification.time,
-                            style: TextStyle(
+                            _formatTime(notification.createdAt),
+                            style: const TextStyle(
                               fontSize: 12,
                               color: _kGrey,
                             ),
@@ -241,7 +247,7 @@ class _NotificationCard extends StatelessWidget {
                       const SizedBox(height: 6),
                       Text(
                         notification.body,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 14,
                           color: _kGrey,
                           height: 1.4,
@@ -267,24 +273,4 @@ class _NotificationCard extends StatelessWidget {
       ),
     );
   }
-}
-
-enum NotificationType { transaction, security, promotion }
-
-class NotificationItem {
-  final int id;
-  final String title;
-  final String body;
-  final String time;
-  final NotificationType type;
-  bool isRead;
-
-  NotificationItem({
-    required this.id,
-    required this.title,
-    required this.body,
-    required this.time,
-    required this.type,
-    required this.isRead,
-  });
 }

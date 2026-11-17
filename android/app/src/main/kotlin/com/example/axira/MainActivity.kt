@@ -1,4 +1,4 @@
-package com.example.axira
+package com.axira.app
 
 import io.flutter.embedding.android.FlutterActivity
 
